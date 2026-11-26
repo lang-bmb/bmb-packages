@@ -468,6 +468,14 @@ impl Converter {
                 }
                 true
             }
+            Item::Type(t) => {
+                self.report(
+                    t.span(),
+                    "type alias",
+                    format!("`type {} = ..`: BMB has no type aliases; write the type where the alias is used", t.ident),
+                );
+                false
+            }
             other => {
                 self.report(other.span(), "item", "an item kind BMB does not have");
                 false
@@ -503,8 +511,11 @@ impl Converter {
                     prefix.pop();
                 }
                 syn::UseTree::Name(n) => {
+                    // `use a::b::{self, ..}` brings in `b` itself.
                     let mut v = prefix.clone();
-                    v.push(n.ident.clone());
+                    if n.ident != "self" || v.is_empty() {
+                        v.push(n.ident.clone());
+                    }
                     out.push((v, None));
                 }
                 syn::UseTree::Rename(r) => {
@@ -833,6 +844,13 @@ impl Converter {
                         format!("`type {}`: BMB has no associated types", t.ident),
                     );
                 }
+                ImplItem::Const(c) => {
+                    self.report(
+                        c.span(),
+                        "associated constant",
+                        format!("`const {}` in an impl: BMB impls hold only functions; make it a `const` of the unit", c.ident),
+                    );
+                }
                 other => {
                     self.report(
                         other.span(),
@@ -1037,6 +1055,20 @@ impl VisitMut for Body<'_> {
             }
         }
         match e {
+            Expr::If(f) if matches!(&*f.cond, Expr::Let(_)) => {
+                self.c.report(
+                    f.if_token.span(),
+                    "if let",
+                    "BMB has no `if let`: write the whole `match` (`bmb fix` rewrites it, E0225)",
+                );
+            }
+            Expr::While(w) if matches!(&*w.cond, Expr::Let(_)) => {
+                self.c.report(
+                    w.while_token.span(),
+                    "while let",
+                    "BMB has no `while let`: write a loop with a `match`",
+                );
+            }
             Expr::Unsafe(u) => {
                 self.c.report(u.unsafe_token.span(), "unsafe", "an `unsafe` block: BMB has no unsafe code; write the safe operation it stands for");
             }

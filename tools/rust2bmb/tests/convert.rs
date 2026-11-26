@@ -198,3 +198,35 @@ fn unsafe_and_paths_from_other_crates_are_reported_where_they_occur() {
     assert_eq!(k.get("path from another crate"), Some(&2), "{k:?}");
     assert_eq!(k.get("use"), Some(&2), "{k:?}");
 }
+
+#[test]
+fn if_let_and_while_let_are_reported() {
+    let src = "fn f(o: Option<u64>, v: &[u8]) -> u64 { if let Some(x) = o { return x; } let mut i: usize = 0; while let Some(b) = v.get(i) { i += 1; } 0 }\n";
+    let k = convert(src, "u").unwrap().kinds();
+    assert_eq!(k.get("if let"), Some(&1), "{k:?}");
+    assert_eq!(k.get("while let"), Some(&1), "{k:?}");
+}
+
+#[test]
+fn type_aliases_and_associated_constants_are_named() {
+    let src =
+        "type Chunk = u32;\nstruct S { a: u32 }\nimpl S { pub const EMPTY: Self = S { a: 0 }; }\n";
+    let k = convert(src, "u").unwrap().kinds();
+    assert_eq!(k.get("type alias"), Some(&1), "{k:?}");
+    assert_eq!(k.get("associated constant"), Some(&1), "{k:?}");
+    assert_eq!(k.get("item"), None, "{k:?}");
+}
+
+#[test]
+fn use_of_self_in_a_group_names_the_module() {
+    let src = "use core::ptr::{self, NonNull};\nstruct S { a: u8 }\nimpl S { fn f(&self) -> u8 { self.a } fn g(&self) -> usize { ptr::null::<u8>() as usize } }\n";
+    let out = convert(src, "u").unwrap();
+    let paths: Vec<_> = out
+        .findings
+        .iter()
+        .filter(|f| f.kind == "path from another crate")
+        .map(|f| f.reason.clone())
+        .collect();
+    assert_eq!(paths.len(), 1, "{paths:?}");
+    assert!(paths[0].contains("core::ptr"), "{paths:?}");
+}

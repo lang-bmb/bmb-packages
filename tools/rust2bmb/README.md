@@ -163,6 +163,55 @@ Rewrites: 24 `#[effects(TODO)]`, 13 attributes dropped, 11 receivers, 11 missing
 
 Of the 161 non-blank lines of `packages/hmac/src/hmac.bmb` (written by hand), 30 are identical to a line of the tool's output: 29 braces or `} else {`, and `mod hmac {`. The origin is a generic HMAC over the `digest` crate's traits, and the port is a concrete HMAC-SHA256 over `std::sha256`. Almost nothing of the origin's text carries over, which the 157 `path from another crate` reports measure.
 
+## Measured on semver 1.0.28
+
+Run as `rust2bmb src/lib.rs=semver src/parse.rs src/eval.rs src/display.rs src/identifier.rs src/impls.rs src/error.rs` (`src/serde.rs` is out of scope), with the current tool:
+
+| | lib | parse | eval | display | identifier | impls | error | together |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| code lines | 151 | 341 | 144 | 145 | 202 | 124 | 115 | 1,222 |
+| items | 25 | 22 | 10 | 12 | 23 | 16 | 10 | 118 |
+| written / with nothing reported / dropped | 11 / 1 / 14 | 17 / 2 / 5 | 9 / 5 / 1 | 2 / 1 / 10 | 15 / 3 / 8 | 2 / 0 / 14 | 3 / 1 / 7 | 59 / 13 / 59 |
+| reported constructs | 25 | 171 | 14 | 43 | 135 | 22 | 10 | 420 |
+| rewrites | 70 | 42 | 11 | 2 | 51 | 6 | 3 | 185 |
+| raw output and `bmb check` (each unit alone) | 50 diagnostics | 157 | 104 | 27 | 62 | 6 | 1 | 387 together |
+
+Reported constructs, counted: let without a type 78, path from another crate 70 (`ptr` 18, `NonNull` 9, `NonZeroUsize` 8, `mem` 8, `str` 6, `FromStr` 5, ..), use 42, unsafe 39 (most in `identifier.rs`), tuple expression 33, tuple pattern 27, impl of a standard-library trait 24, if let 20, reference outside a parameter 16 (`&str` in results and fields), tuple type 7, module declaration 7, derive 7, associated type 7, range pattern 6, macro invocation 5, iterator method 5, missing method 4, associated constant 4, method turbofish 3, let else 3, literal pattern 2, impl Trait type 2, for pattern 2, for over an iterator 2, while let 1, tuple struct 1, match scrutinee 1, extern crate 1, closure 1.
+
+Rewrites: 57 `#[effects(TODO)]`, 42 visibility, 22 `let` types, 17 field init shorthands, 15 receivers, 12 doc comments, 11 `use crate::..` to full paths, 3 built-in `use`s, 2 literal suffixes, 2 doc comments on fields dropped, 1 missing return type, 1 inner attributes.
+
+Of the 1,299 non-blank lines of `packages/semver/src/semver.bmb` (written by hand), 236 are identical to a line of the tool's output. 208 of those are braces, `} else {` or `Ok(())`, and the other 28 are mostly `return false;`, `};` and lines of the comparator reader (`let mut has_wildcard: bool = false;`, `op = Op::Wildcard;`).
+
+## Measured on percent-encoding 2.3.2
+
+Run as `rust2bmb src/lib.rs=percent_encoding src/ascii_set.rs`, with the current tool:
+
+| | `lib.rs` | `ascii_set.rs` | together |
+| --- | --- | --- | --- |
+| code lines | 303 | 148 | 451 |
+| items | 22 | 13 | 35 |
+| written / with nothing reported / dropped | 10 / 0 / 12 | 8 / 1 / 5 | 18 / 1 / 17 |
+| reported constructs | 73 | 16 | 89 |
+| rewrites | 47 | 40 | 87 |
+| raw output and `bmb check` | | | no: 102 diagnostics together (23 E0208 lifetimes, 21 E0103, 17 E0101 for the byte table's string continuation lines, ..) |
+
+Reported constructs, counted: path from another crate 26, use 10, let without a type 8, lifetime 7, reference outside a parameter 5, lifetime parameter 5, impl of a standard-library trait 5, iterator method 3, derive 3, unsafe 2, test module 2, macro invocation 2, extern crate 2, associated type 2, type alias 1, module declaration 1, missing method 1, macro definition 1, if let 1, closure 1, associated constant 1.
+
+Rewrites: 18 visibility, 18 `#[effects(TODO)]`, 16 doc comments, 11 receivers, 10 attributes dropped, 6 `let` types, 5 field init shorthands, 2 built-in `use`s, 1 inner attributes.
+
+Of the 412 non-blank lines of `packages/percent_encoding/src/percent_encoding.bmb` (written by hand), 42 are identical to a line of the tool's output, and only the `mod` line is not a brace: the port's set is an array of `bool`s and its encoder a loop, where the origin has bit masks and iterators.
+
+### Fixed while measuring semver and percent-encoding
+
+Reports that were silent or vague, not new rewrites:
+
+- `if let` and `while let` passed without a report. They are now reported (20 in semver, 1 in percent-encoding).
+- A type alias was reported as "an item kind BMB does not have"; it is now `type alias`.
+- An associated constant in an impl was reported as "only functions are accepted in a BMB impl"; it is now `associated constant`.
+- `use core::ptr::{self, NonNull};` recorded the name `self` as coming from another crate, so every `self` in the written code was reported as a path from another crate (13 wrong reports in semver), and the uses of `ptr` were not. It now records `ptr`.
+
+The earlier three packages' numbers are unchanged by these (re-measured).
+
 ## Per package
 
 | package | origin code lines | items written / dropped | reports | rewrites | raw output checks | final lines matching the tool's output (substantive) |
@@ -170,6 +219,8 @@ Of the 161 non-blank lines of `packages/hmac/src/hmac.bmb` (written by hand), 30
 | hex | 351 | 18 / 19 | 69 | 79 | no (30) | 43 of 339 (10) |
 | siphash | 987 | 44 / 30 | 148 | 564 | no (347) | 52 of 363 (0) |
 | hmac | 359 | 42 / 28 | 285 | 89 | no (98) | 30 of 161 (1) |
+| semver | 1,222 | 59 / 59 | 420 | 185 | no (387) | 236 of 1,299 (28) |
+| percent_encoding | 451 | 18 / 17 | 89 | 87 | no (102) | 42 of 412 (1) |
 
 ## Checks
 
