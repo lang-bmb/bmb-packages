@@ -1,0 +1,10 @@
+[package]
+name = "hmac-reference"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Writes tests/reference.txt with expected values computed by the origin crate"
+
+[dependencies]
+hmac = "=0.13.0"
+sha2 = "0.11"

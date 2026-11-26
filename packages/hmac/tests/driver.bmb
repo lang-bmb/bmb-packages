@@ -1,0 +1,84 @@
+#[summary("Test driver of the hmac package: standard input is the key, the message and a tag, one after another, with the key and message lengths as the arguments after the operation: mac KEYLEN MSGLEN writes the tag as lowercase hex; verify_slice and verify_truncated_left KEYLEN MSGLEN write ok or error for the given tag. A bad command line exits with 2")]
+mod driver {
+    #[effects(alloc, io, nondet)]
+    fn main() -> () {
+        let args: Vec<String> = std::env::args();
+        if args.len() != 4 {
+            usage();
+        }
+        let mut input: Vec<u8> = Vec::new();
+        match std::io::read_to_end(&mut input) {
+            Ok(n) => {},
+            Err(e) => usage(),
+        }
+        let kl: usize = number(args[2].as_str());
+        let ml: usize = number(args[3].as_str());
+        if kl + ml > input.len() {
+            usage();
+        }
+        let key: Vec<u8> = part(input.as_slice(), 0, kl);
+        let msg: Vec<u8> = part(input.as_slice(), kl, kl + ml);
+        let given: Vec<u8> = part(input.as_slice(), kl + ml, input.len());
+        let tag: [u8; 32] = hmac::mac(key.as_slice(), msg.as_slice());
+        let op: String = args[1].clone();
+        if op == "mac" {
+            show(&tag);
+        } else if op == "verify_slice" || op == "verify_truncated_left" {
+            let ok: bool = if op == "verify_slice" {
+                hmac::verify_slice(&tag, given.as_slice())
+            } else {
+                hmac::verify_truncated_left(&tag, given.as_slice())
+            };
+            if ok {
+                print_str("ok");
+            } else {
+                print_str("error");
+            }
+        } else {
+            usage();
+        }
+    }
+
+    #[effects(io)]
+    fn number(a: &str) -> (r: usize)
+        ensures r <= 1048576,
+    {
+        match std::num::parse_u64(a) {
+            None => { usage(); 0 },
+            Some(n) => { if n > 1048576 { usage(); } n as usize },
+        }
+    }
+
+    #[effects(alloc)]
+    fn part(v: &[u8], from: usize, to: usize) -> (r: Vec<u8>)
+        requires from <= to, to <= v.len(),
+        ensures r.len() == to - from,
+    {
+        let mut out: Vec<u8> = Vec::new();
+        for i in from..to
+            invariant out.len() == i - from,
+        {
+            out.push(v[i]);
+        }
+        out
+    }
+
+    #[effects(alloc, io)]
+    fn show(b: &[u8]) -> () {
+        let digits: [u8; 16] = [48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 97, 98, 99, 100, 101, 102];
+        let mut out: Vec<u8> = Vec::new();
+        for i in 0..b.len() {
+            out.push(digits[(b[i] >> 4) as usize]);
+            out.push(digits[(b[i] & 15) as usize]);
+        }
+        print_bytes(out.as_slice());
+    }
+
+    #[effects(io)]
+    fn usage() -> ()
+        ensures false,
+    {
+        eprint_str("usage: driver mac|verify_slice|verify_truncated_left KEYLEN MSGLEN < key-message-tag\n");
+        std::process::exit(2);
+    }
+}

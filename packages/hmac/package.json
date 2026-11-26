@@ -1,0 +1,17 @@
+{
+  "name": "hmac",
+  "version": "0.1.0",
+  "summary": "HMAC-SHA256 (RFC 2104) on top of std::sha256, proved to be HMAC in terms of the SHA-256 specification, with verification of whole and truncated tags",
+  "licence": "MIT",
+  "units": ["hmac"],
+  "deps": {
+    "std": ["sha256"]
+  },
+  "origin": {
+    "crate": "hmac",
+    "version": "0.13.0",
+    "repository": "https://github.com/RustCrypto/MACs",
+    "commit": "0236c8eb50098dd7f277a71ab89caaeb1e7314df",
+    "licence": "MIT OR Apache-2.0"
+  }
+}

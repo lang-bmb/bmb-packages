@@ -1,0 +1,177 @@
+#[summary("hmac: HMAC-SHA256 (RFC 2104, FIPS 198-1) on top of std::sha256, after the Rust crate hmac 0.13.0. mac computes it from the key block, the inner and the outer input, and its body proves the result is HMAC-SHA256 in terms of the SHA-256 specification std::sha256::hashed; each step has an exact contract. verify_slice and verify_truncated_left compare without an early exit")]
+mod hmac {
+    spec fn copied(p: &[u8], data: &[u8], n: usize) -> bool {
+        n <= data.len() && 64 + n <= p.len() && (forall|q: usize| q < n ==> #[trigger] data[q] == p[64 + q])
+    }
+
+    #[summary("The first n bytes of a and b are equal; every byte is read whatever the outcome")]
+    #[effects(pure)]
+    #[uses(same_upto)]
+    fn equal_upto(a: &[u8], b: &[u8], n: usize) -> (r: bool)
+        requires n <= a.len(), n <= b.len(),
+        ensures r == same_upto(a, b, n),
+    {
+        let mut diff: u8 = 0;
+        let mut i: usize = 0;
+        while i < n
+            invariant i <= n, n <= a.len(), n <= b.len(), (diff == 0) == same_upto(a, b, i),
+            decreases n - i,
+        {
+            assert((diff | a[i] ^ b[i] == 0) == (diff == 0 && a[i] == b[i])) by (bit_vector);
+            diff = diff | a[i] ^ b[i];
+            i = i + 1;
+        }
+        diff == 0
+    }
+
+    #[summary("tag is HMAC-SHA256(key, msg) (RFC 2104): kb the key block of key (with kh the SHA-256 of a long key), inner = (kb ^ ipad) ++ msg, ih its SHA-256, outer = (kb ^ opad) ++ ih, and tag its SHA-256")]
+    spec fn is_hmac(key: &[u8], msg: &[u8], kh: &[u8], kb: &[u8], inner: &[u8], ih: &[u8], outer: &[u8], tag: &[u8]) -> bool {
+        key_block_of(key, kh, kb) && padded_with(kb, 54, msg, inner) && std::sha256::hashed(inner, ih) && padded_with(kb, 92, ih, outer) && std::sha256::hashed(outer, tag)
+    }
+
+    #[summary("The key block of key (the origin's get_der_key): the key padded with zeros, or kh, its SHA-256, padded when the key is longer than 64 bytes")]
+    #[effects(pure)]
+    #[uses(key_block_of, zero_padded)]
+    fn key_block(key: &[u8], kh: [u8; 32]) -> (kb: [u8; 64])
+        requires key.len() > 64 ==> std::sha256::hashed(key, &kh),
+        ensures key_block_of(key, &kh, &kb),
+    {
+        let mut b: [u8; 64] = [0; 64];
+        if key.len() <= 64 {
+            for j in 0..key.len()
+                invariant key.len() <= 64, forall|t: usize| t < 64 ==> #[trigger] b[t] == (if t < j { key[t] } else { 0 }),
+            {
+                b[j] = key[j];
+            }
+        } else {
+            let size: usize = 32;
+            for j in 0..size
+                invariant forall|t: usize| t < 64 ==> #[trigger] b[t] == (if t < j { kh[t] } else { 0 }),
+            {
+                b[j] = kh[j];
+            }
+        }
+        b
+    }
+
+    #[summary("kb is the key block of key: key padded with zeros to 64 bytes, or for a key longer than 64 bytes its SHA-256 kh padded with zeros")]
+    spec fn key_block_of(key: &[u8], kh: &[u8], kb: &[u8]) -> bool {
+        kh.len() == 32 && (if key.len() <= 64 { zero_padded(key, kb) } else { std::sha256::hashed(key, kh) && zero_padded(kh, kb) })
+    }
+
+    #[summary("The SHA-256 of a key longer than 64 bytes; zero for a shorter key, which is used as it is")]
+    #[effects(alloc)]
+    fn key_hash(key: &[u8]) -> (kh: [u8; 32])
+        requires key.len() < 2305843009213693952,
+        ensures key.len() > 64 ==> std::sha256::hashed(key, &kh),
+    {
+        if key.len() > 64 {
+            std::sha256::digest(key)
+        } else {
+            [0; 32]
+        }
+    }
+
+    #[summary("The lengths std::sha256 accepts for the key and the inner input")]
+    spec fn lengths_ok(key: &[u8], msg: &[u8]) -> bool {
+        key.len() < 2305843009213693952 && msg.len() < 2305843009213693888
+    }
+
+    #[summary("HMAC-SHA256 of msg under key. That the result is HMAC as RFC 2104 defines it, in terms of the SHA-256 specification std::sha256::hashed, is proved at the end of the body over the intermediate values; the contract cannot name them")]
+    #[effects(alloc)]
+    #[uses(is_hmac, lengths_ok)]
+    fn mac(key: &[u8], msg: &[u8]) -> [u8; 32]
+        requires lengths_ok(key, msg),
+    {
+        let kh: [u8; 32] = key_hash(key);
+        let kb: [u8; 64] = key_block(key, kh);
+        let inner: Vec<u8> = pad_input(kb, 54, msg);
+        let ih: [u8; 32] = std::sha256::digest(inner.as_slice());
+        let outer: Vec<u8> = pad_input(kb, 92, &ih);
+        let tag: [u8; 32] = std::sha256::digest(outer.as_slice());
+        assert(is_hmac(key, msg, &kh, &kb, inner.as_slice(), &ih, outer.as_slice(), &tag));
+        tag
+    }
+
+    #[summary("The 64 bytes kb ^ pad followed by data (the inner input with ipad = 0x36 and the message, the outer input with opad = 0x5c and the inner hash)")]
+    #[effects(alloc)]
+    #[uses(copied, padded_with, xored)]
+    fn pad_input(kb: [u8; 64], pad: u8, data: &[u8]) -> (p: Vec<u8>)
+        requires data.len() < 2305843009213693888,
+        ensures padded_with(&kb, pad, data, p.as_slice()),
+    {
+        let mut v: Vec<u8> = Vec::with_capacity(64 + data.len());
+        let block: usize = 64;
+        for j in 0..block
+            invariant v.len() == j, xored(v.as_slice(), &kb, pad, j),
+        {
+            v.push(xor(kb[j], pad));
+        }
+        for i in 0..data.len()
+            invariant v.len() == 64 + i, xored(v.as_slice(), &kb, pad, 64), copied(v.as_slice(), data, i),
+        {
+            v.push(data[i]);
+        }
+        v
+    }
+
+    #[summary("p is the 64 bytes kb ^ pad followed by data")]
+    spec fn padded_with(kb: &[u8], pad: u8, data: &[u8], p: &[u8]) -> bool {
+        kb.len() == 64 && p.len() == 64 + data.len() && (forall|j: usize| j < 64 ==> #[trigger] p[j] == xr(kb[j], pad)) && (forall|i: usize| i < data.len() ==> #[trigger] data[i] == p[64 + i])
+    }
+
+    spec fn same_upto(a: &[u8], b: &[u8], n: usize) -> bool {
+        n <= a.len() && n <= b.len() && (forall|k: usize| k < n ==> #[trigger] a[k] == b[k])
+    }
+
+    #[summary("Whether tag is the whole of the expected tag (the origin's verify_slice: a tag of another length is rejected)")]
+    #[effects(pure)]
+    #[uses(same_upto)]
+    fn verify_slice(expected: &[u8], tag: &[u8]) -> (r: bool)
+        requires expected.len() == 32,
+        ensures r == (tag.len() == 32 && same_upto(expected, tag, 32)),
+    {
+        if tag.len() != 32 {
+            false
+        } else {
+            equal_upto(expected, tag, 32)
+        }
+    }
+
+    #[summary("Whether tag is the leftmost tag.len() bytes of the expected tag (the origin's verify_truncated_left: an empty tag or one longer than 32 bytes is rejected)")]
+    #[effects(pure)]
+    #[uses(same_upto)]
+    fn verify_truncated_left(expected: &[u8], tag: &[u8]) -> (r: bool)
+        requires expected.len() == 32,
+        ensures r == (0 < tag.len() && tag.len() <= 32 && same_upto(expected, tag, tag.len())),
+    {
+        if tag.len() == 0 || tag.len() > 32 {
+            false
+        } else {
+            equal_upto(expected, tag, tag.len())
+        }
+    }
+
+    #[summary("x ^ pad, kept by name in the quantified facts")]
+    #[effects(pure)]
+    #[uses(xr)]
+    fn xor(x: u8, pad: u8) -> (r: u8)
+        ensures r == xr(x, pad),
+    {
+        x ^ pad
+    }
+
+    spec fn xored(p: &[u8], kb: &[u8], pad: u8, n: usize) -> bool {
+        n <= p.len() && n <= kb.len() && (forall|q: usize| q < n ==> #[trigger] p[q] == xr(kb[q], pad))
+    }
+
+    #[summary("x ^ pad")]
+    spec fn xr(x: u8, pad: u8) -> u8 {
+        x ^ pad
+    }
+
+    #[summary("kb is src padded with zeros to 64 bytes")]
+    spec fn zero_padded(src: &[u8], kb: &[u8]) -> bool {
+        kb.len() == 64 && src.len() <= 64 && (forall|j: usize| j < 64 ==> #[trigger] kb[j] == (if j < src.len() { src[j] } else { 0 }))
+    }
+}
