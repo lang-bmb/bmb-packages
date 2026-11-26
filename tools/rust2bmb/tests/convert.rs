@@ -162,3 +162,39 @@ fn literal_suffixes_are_dropped() {
     let out = convert("fn f() -> [u8; 4] { [0_u8; 4] }\n", "u").unwrap();
     assert!(out.text.contains("[0; 4]"), "{}", out.text);
 }
+
+#[test]
+fn let_types_come_from_initializers_that_name_them() {
+    let src = "struct P { x: u64 }\nimpl P { fn new() -> P { P { x: 0 } } fn get(&self) -> u64 { let a = self.x; let b = [0u8; 8]; let c = u64::from_le_bytes(b); let d = a.wrapping_add(c); let n = b.len(); let e = b[0]; let p = P::new(); let q = Self::new(); let f = (d >> 3) as u32; let g = a ^ 1; let mut i = 0; d } }\n";
+    let out = convert(src, "u").unwrap();
+    for t in [
+        "let a: u64",
+        "let b: [u8; 8]",
+        "let c: u64",
+        "let d: u64",
+        "let n: usize",
+        "let e: u8",
+        "let p: P",
+        "let q: P",
+        "let f: u32",
+        "let g: u64",
+    ] {
+        assert!(out.text.contains(t), "{t}: {}", out.text);
+    }
+    let lets: Vec<_> = out
+        .findings
+        .iter()
+        .filter(|f| f.kind == "let without a type")
+        .collect();
+    assert_eq!(lets.len(), 1, "{:?}", out.findings);
+    assert!(lets[0].reason.contains("let mut i"), "{:?}", lets);
+}
+
+#[test]
+fn unsafe_and_paths_from_other_crates_are_reported_where_they_occur() {
+    let src = "use core::mem;\nuse digest::Digest;\nunsafe fn f(x: &[u8]) -> usize { mem::size_of::<u64>() + x.len() }\nfn g<D: Digest>() -> usize { unsafe { f(&[]) } }\n";
+    let k = convert(src, "u").unwrap().kinds();
+    assert_eq!(k.get("unsafe"), Some(&2), "{k:?}");
+    assert_eq!(k.get("path from another crate"), Some(&2), "{k:?}");
+    assert_eq!(k.get("use"), Some(&2), "{k:?}");
+}

@@ -26,9 +26,18 @@ Each file becomes one unit, named `UNIT` or after the file. The units are writte
 - turns `const X: &[u8; N] = b"..";` into `const X: [u8; N] = [..];`;
 - turns enum variants with named fields into positional ones, and their constructions and patterns into positional ones in declaration order;
 - turns a `match` on an integer whose arms are literals, ranges, `|` of those and a final `_` into an `if` chain;
-- writes field init shorthand as `name: name`, drops integer literal suffixes, and replaces `use crate::m::Name;` by full paths; a `use` of a type BMB has built in (`String`, `Vec`, `Box`, `Option`, `Result`) is dropped.
+- writes field init shorthand as `name: name`, drops integer literal suffixes, and replaces `use crate::m::Name;` by full paths; a `use` of a type BMB has built in (`String`, `Vec`, `Box`, `Option`, `Result`) is dropped;
+- writes the type of a `let` when its initializer names it (`src/infer.rs`): a suffixed, byte, `bool` or `char` literal, a cast, an array or repeat of those, `.len()`, `wrapping_*`/`rotate_*`/`to_le_bytes` of a typed value, an integer type's `from_le_bytes` or `MAX`, a struct literal, a call of a function of the crate with a written return type (`f`, `T::f`, `Self::f`), a field of a struct of the crate, an element of an array or slice, arithmetic with a typed left operand, a comparison. Any other `let` stays reported.
 
-Items with no BMB counterpart at all (`use` of other paths, `extern crate`, `mod m;`, `#[cfg(test)]` modules, macro definitions and item-level macro calls, impls of standard-library traits) are dropped and reported. Every other item is written, with what is inside it reported.
+Items with no BMB counterpart at all (`use` of other paths, `extern crate`, `mod m;`, `#[cfg(test)]` modules, macro definitions and item-level macro calls, impls of standard-library traits) are dropped and reported. Every other item is written, with what is inside it reported. A name brought in by a `use` of another crate (the Rust standard library included) is reported again at every place the written code uses it (`path from another crate`), and so are `unsafe` functions and blocks.
+
+### Added after the first measurement
+
+What `siphasher` and `hmac` showed was mechanical and not yet done, and what was added for it:
+
+1. **`let` types from the initializer.** `let` without a type was 72 of siphasher's reports. The tool now writes the type wherever the initializer settles it (the list above), 49 of the 72 in siphasher, 2 of 3 in hex. What is left needs a type checker: `let mut i = 0;` takes its type from later uses.
+2. **Uses of names from other crates are reported where they occur.** The `use` report used to say so without doing it, so `PhantomData`, `mem::size_of`, `cmp::min` in siphasher and every `digest` trait and type in hmac (`D: Digest + BlockSizeUser`, `Block<D>`, `Output<Self>`) passed silently. They are now 17 reports in siphasher, 157 in hmac and 5 in hex. A single-name `use` (a re-export of an item of the same file, such as `pub(crate) use load_int_le;`) is reported as such, not as another crate.
+3. **`unsafe` is reported** (11 in siphasher: `unsafe fn u8to64_le` and the blocks around the pointer loads). It passed silently before.
 
 ## Measured on hex 0.4.3
 
@@ -79,6 +88,88 @@ Grouped by idiom: iterators and closures 18 (iterator methods, `for` over an ite
 The rewrites applied (77): 16 `#[effects(TODO)]`, 11 doc comments to `#[summary]`, 3 doc comments on variants dropped, 10 attributes dropped, 8 visibility, 7 `AsRef<[u8]>` parameters, 5 `as_ref` uses (2 `let`, 3 calls), 4 receivers, 4 `use crate::..` to full paths, 2 built-in `use`s, 2 byte-string constants, 1 named-field enum, 1 construction of a named-field variant, 1 integer `match` to an `if` chain, 1 field init shorthand, 1 inner attributes.
 
 How much of the final `packages/hex/src/hex.bmb` came from the tool: it was written by hand from the origin, not by editing the tool's output, and the overlap was measured afterwards by matching trimmed lines. Of its 339 non-blank lines, 43 are identical to a line of the tool's output; 33 of those are braces, `} else {` or `Ok(())`, and 10 are substantive (the `mod` line, three length checks, and the six lines of `val`'s `if` chain, which the tool made from the origin's `match`). The other 296 were written by hand: 106 lines of `spec fn`, 20 contract clauses, 8 lines of proof, 40 `#[summary]`, 13 `#[effects]`, 7 `#[uses]`, and the code that replaces iterators and tuples. Line matching undercounts a little: the tool's printer and BMB's normal form lay out some expressions differently.
+
+Re-measured with the current tool (after the additions above): 69 reports (64 + 5) and 79 rewrites. `let` types were written for 2 `let`s (`let high = table[..]` and `let low`); the remaining `let (high, low)` is a tuple. The 5 `path from another crate` reports are `iter::FromIterator`, written five times. The raw output still does not check: the same 30 diagnostics.
+
+## Measured on siphasher 1.0.4
+
+Run as `rust2bmb src/lib.rs=siphasher src/sip.rs src/sip128.rs src/common.rs` (the test files `src/tests.rs`, `src/tests128.rs` are the package's test data, not ported code), with the current tool:
+
+| | `lib.rs` | `sip.rs` | `sip128.rs` | `common.rs` | together |
+| --- | --- | --- | --- | --- | --- |
+| code lines | 23 | 413 | 496 | 55 | 987 |
+| items | 7 | 25 | 37 | 5 | 74 |
+| written / with nothing reported / dropped | 0 / 0 / 7 | 18 / 0 / 7 | 25 / 5 / 12 | 1 / 0 / 4 | 44 / 5 / 30 |
+| reported constructs | 7 | 61 | 69 | 11 | 148 |
+| rewrites | 1 | 255 | 304 | 4 | 564 |
+| raw output and `bmb check` (each unit alone) | checks (only `mod` items were left) | 156 diagnostics | 177 | 14 | 347 together |
+
+The 347 diagnostics together: 61 E0103 (parse), 54 E0306, 44 E0602 (`#[effects(TODO)]`), 26 E0404, 19 E0305, 18 E0409, 17 E0201, 14 E0233, 11 E0215, 11 E0304, 10 E0435, 9 E0401, 7 E0402, 7 E0408, 6 each E0202, E0310, E0420, 4 E0237, 3 each E0301, E0308, 2 each E0205, E0210, E0424, E0434, E0506, 1 E0601.
+
+Reported constructs, counted:
+
+| kind | count |
+| --- | --- |
+| macro invocation (`compress!` 20, `load_int_le!` 6, `debug_assert!` 3, `debug_assert_eq!` 1) | 30 |
+| let without a type | 23 |
+| path from another crate (`hash::Hasher` 8, `PhantomData` 5, `cmp::min` 2, `mem::size_of` 2) | 17 |
+| derive | 15 |
+| use | 12 |
+| unsafe | 11 |
+| tuple type (`keys() -> (u64, u64)`, `as_u64`) | 7 |
+| tuple expression | 7 |
+| impl of a standard-library trait (`Default` 2, `Clone`, `PartialEq`, `Eq`, `From` 2; the impls of `hash::Hasher` are written and their trait counted as `path from another crate`) | 7 |
+| tuple struct (`SipHasher(SipHasher24)`) | 6 |
+| parameter pattern (`_: &mut State` in the `Sip` trait) | 4 |
+| module declaration | 3 |
+| test module, macro definition, inline module (`pub mod prelude`, `reexports`) | 2 each |
+
+Rewrites: 123 `#[effects(TODO)]`, 110 attributes dropped (mostly `#[inline]`), 88 receivers, 64 missing return types, 51 visibility, 51 doc comments, 49 `let` types, 19 literal suffixes, 6 `use crate::..` to full paths, 2 field init shorthands, 1 inner attributes.
+
+Of the 363 non-blank lines of `packages/siphash/src/siphash.bmb` (written by hand), 52 are identical to a line of the tool's output, all braces or `} else {`. The origin's SipRound is the macro `compress!`, which the tool drops. Its word loads are `unsafe` macro calls. The port's byte-at-a-time state machine and its specification have no counterpart line.
+
+## Measured on hmac 0.13.0
+
+Run as `rust2bmb src/lib.rs=hmac src/simple.rs src/simple_reset.rs src/block_api.rs src/utils.rs`, with the current tool:
+
+| | `lib.rs` | `simple.rs` | `simple_reset.rs` | `block_api.rs` | `utils.rs` | together |
+| --- | --- | --- | --- | --- | --- | --- |
+| code lines | 36 | 54 | 74 | 174 | 21 | 359 |
+| items | 13 | 11 | 14 | 28 | 4 | 70 |
+| written / with nothing reported / dropped | 2 / 0 / 11 | 7 / 0 / 4 | 9 / 0 / 5 | 21 / 0 / 7 | 3 / 2 / 1 | 42 / 2 / 28 |
+| reported constructs | 27 | 49 | 69 | 131 | 9 | 285 |
+| rewrites | 3 | 16 | 24 | 41 | 5 | 89 |
+| raw output and `bmb check` (each unit alone) | 6 diagnostics | 15 | 18 | 48 | 11 | 98 together |
+
+The 98 diagnostics together: 52 E0305 (unknown types, the `digest` crate's), 27 E0103 (parse), 10 E0263, 4 E0208, 2 E0201, 2 E0304, 1 E0602.
+
+Reported constructs, counted:
+
+| kind | count |
+| --- | --- |
+| path from another crate (the `digest` crate's traits and types: `Digest`, `BlockSizeUser`, `Block`, `Output`, `KeyInit`, `EagerHash`, ..) | 157 |
+| use | 59 |
+| let without a type | 21 |
+| associated type (`KeySize` 4, `OutputSize` 4, `BlockSize` 2, `BufferKind` 2) | 12 |
+| closure | 10 |
+| iterator method | 8 |
+| impl of a standard-library trait (`fmt::Debug` 4, `Clone` 2) | 6 |
+| module declaration | 4 |
+| missing method (`expect`) | 4 |
+| macro invocation (`digest::buffer_fixed!`) | 2 |
+| derive | 2 |
+
+Rewrites: 24 `#[effects(TODO)]`, 13 attributes dropped, 11 receivers, 11 missing return types, 9 `use crate::..` to full paths, 8 field init shorthands, 7 visibility, 4 doc comments, 1 `let` type, 1 inner attributes.
+
+Of the 161 non-blank lines of `packages/hmac/src/hmac.bmb` (written by hand), 30 are identical to a line of the tool's output: 29 braces or `} else {`, and `mod hmac {`. The origin is a generic HMAC over the `digest` crate's traits, and the port is a concrete HMAC-SHA256 over `std::sha256`. Almost nothing of the origin's text carries over, which the 157 `path from another crate` reports measure.
+
+## Per package
+
+| package | origin code lines | items written / dropped | reports | rewrites | raw output checks | final lines matching the tool's output (substantive) |
+| --- | --- | --- | --- | --- | --- | --- |
+| hex | 351 | 18 / 19 | 69 | 79 | no (30) | 43 of 339 (10) |
+| siphash | 987 | 44 / 30 | 148 | 564 | no (347) | 52 of 363 (0) |
+| hmac | 359 | 42 / 28 | 285 | 89 | no (98) | 30 of 161 (1) |
 
 ## Checks
 

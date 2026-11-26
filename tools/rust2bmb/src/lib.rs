@@ -7,6 +7,8 @@
 //! `#[effects(TODO)]` where an effect set must be chosen, and the output is
 //! the input of hand work, not a finished port.
 
+mod infer;
+
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use proc_macro2::Span;
@@ -198,6 +200,11 @@ struct Converter {
     item_findings: usize,
     /// The `AsRef<[u8]>` parameters of the item being converted.
     as_ref_args: HashSet<String>,
+    /// What the crate's files declare, for the types of `let`s.
+    decls: infer::Decls,
+    /// Names brought in by `use` from another crate (the standard library
+    /// included), with the path they stand for.
+    external: HashMap<String, String>,
 }
 
 impl Converter {
@@ -366,10 +373,12 @@ impl Converter {
             Item::Fn(f) => {
                 self.attrs(&mut f.attrs);
                 self.vis(&mut f.vis);
+                self.unsafety(&f.sig);
                 self.signature(&mut f.sig, None);
                 f.attrs.push(parse_quote!(#[effects(TODO)]));
                 self.rewrote("#[effects(TODO)] placed");
-                self.block(&mut f.block);
+                let sig = f.sig.clone();
+                self.block(&mut f.block, &sig, None);
                 true
             }
             Item::Const(c) => {
@@ -466,9 +475,6 @@ impl Converter {
         };
         if kept {
             self.out.items_emitted += 1;
-            if self.item_findings == 0 {
-                self.out.items_clean += 1;
-            }
             Some(item)
         } else {
             None
@@ -554,12 +560,32 @@ impl Converter {
                     "use",
                     format!("`use {text}`: no BMB counterpart of this standard-library path; its uses are reported where they occur"),
                 );
+                let name = rename
+                    .as_ref()
+                    .map(|r| r.to_string())
+                    .unwrap_or(last.clone());
+                self.external.insert(name, text.clone());
+            } else if path.len() == 1 {
+                self.report(
+                    u.span(),
+                    "use",
+                    format!(
+                        "`use {text}`: a re-export of an item of this file (BMB has no re-exports)"
+                    ),
+                );
             } else {
                 self.report(
                     u.span(),
                     "use",
-                    format!("`use {text}`: a path outside this crate's units"),
+                    format!("`use {text}`: a path outside this crate's units; its uses are reported where they occur"),
                 );
+                let name = rename
+                    .as_ref()
+                    .map(|r| r.to_string())
+                    .unwrap_or(last.clone());
+                if !["self", "super", "crate"].contains(&first.as_str()) {
+                    self.external.insert(name, text.clone());
+                }
             }
         }
     }
@@ -793,10 +819,12 @@ impl Converter {
                 ImplItem::Fn(f) => {
                     self.attrs(&mut f.attrs);
                     self.vis(&mut f.vis);
+                    self.unsafety(&f.sig);
                     self.signature(&mut f.sig, Some(&self_ty));
                     f.attrs.push(parse_quote!(#[effects(TODO)]));
                     self.rewrote("#[effects(TODO)] placed");
-                    self.block(&mut f.block);
+                    let sig = f.sig.clone();
+                    self.block(&mut f.block, &sig, Some(&self_ty));
                 }
                 ImplItem::Type(t) => {
                     self.report(
@@ -841,15 +869,27 @@ impl Converter {
         self.ty(&c.ty.clone(), "a constant");
     }
 
-    fn block(&mut self, block: &mut Block) {
-        let mut body = Body { c: self };
+    fn block(&mut self, block: &mut Block, sig: &syn::Signature, self_ty: Option<&str>) {
+        let scope = infer::Scope::new(self.decls.clone(), self_ty.map(str::to_string), sig);
+        let mut body = Body { c: self, scope };
         body.visit_block_mut(block);
+    }
+
+    fn unsafety(&mut self, sig: &syn::Signature) {
+        if let Some(u) = &sig.unsafety {
+            self.report(
+                u.span(),
+                "unsafe",
+                format!("`unsafe fn {}`: BMB has no unsafe code; what the function relies on becomes its `requires`", sig.ident),
+            );
+        }
     }
 }
 
 /// The rewrites and reports inside function bodies.
 struct Body<'a> {
     c: &'a mut Converter,
+    scope: infer::Scope,
 }
 
 impl Body<'_> {
@@ -997,6 +1037,9 @@ impl VisitMut for Body<'_> {
             }
         }
         match e {
+            Expr::Unsafe(u) => {
+                self.c.report(u.unsafe_token.span(), "unsafe", "an `unsafe` block: BMB has no unsafe code; write the safe operation it stands for");
+            }
             Expr::Closure(c) => {
                 self.c.report(c.span(), "closure", "closures come only as `Fn`-bound arguments with typed parameters (E0263, E0264)");
             }
@@ -1212,9 +1255,35 @@ impl VisitMut for Body<'_> {
     }
 
     fn visit_local_mut(&mut self, l: &mut syn::Local) {
-        let typed = matches!(&l.pat, Pat::Type(_));
-        if !typed {
-            self.c.report(l.pat.span(), "let without a type", format!("`let {}`: BMB writes the type of every `let`, and the tool does not infer types", path_text(&l.pat)));
+        match &l.pat {
+            Pat::Type(pt) => {
+                if let Pat::Ident(pi) = &*pt.pat {
+                    self.scope.bind(pi.ident.to_string(), (*pt.ty).clone());
+                }
+            }
+            Pat::Ident(pi) => {
+                let inferred = l.init.as_ref().and_then(|i| self.scope.infer(&i.expr));
+                match inferred {
+                    Some(ty) => {
+                        self.scope.bind(pi.ident.to_string(), ty.clone());
+                        let pat = l.pat.clone();
+                        l.pat = Pat::Type(syn::PatType {
+                            attrs: vec![],
+                            pat: Box::new(pat),
+                            colon_token: Default::default(),
+                            ty: Box::new(ty),
+                        });
+                        self.c
+                            .rewrote("type of a `let` written from its initializer");
+                    }
+                    None => {
+                        self.c.report(l.pat.span(), "let without a type", format!("`let {}`: BMB writes the type of every `let`, and the initializer does not name it", path_text(&l.pat)));
+                    }
+                }
+            }
+            other => {
+                self.c.report(other.span(), "let without a type", format!("`let {}`: BMB writes the type of every `let`, and the tool does not infer types", path_text(other)));
+            }
         }
         if let Some(init) = &l.init {
             if init.diverge.is_some() {
@@ -1234,6 +1303,20 @@ struct Qualify<'a> {
 impl VisitMut for Qualify<'_> {
     fn visit_path_mut(&mut self, p: &mut syn::Path) {
         self.c.qualify(p);
+        if p.leading_colon.is_none() {
+            if let Some(first) = p.segments.first() {
+                if let Some(from) = self.c.external.get(&first.ident.to_string()).cloned() {
+                    self.c.report(
+                        p.span(),
+                        "path from another crate",
+                        format!(
+                            "`{}` (`{from}`): no BMB counterpart is known to the tool",
+                            path_text(p)
+                        ),
+                    );
+                }
+            }
+        }
         visit_mut::visit_path_mut(self, p);
     }
 }
@@ -1283,23 +1366,27 @@ pub fn convert_all(inputs: &[(&str, &str)]) -> Result<Vec<Output>, (usize, syn::
         files.push(syn::parse_file(src).map_err(|e| (k, e))?);
     }
     let mut variants = Variants::new();
+    let mut decls = infer::Decls::default();
     for f in &files {
         Converter::collect_variants(&f.items, &mut variants);
+        infer::collect(&f.items, &mut decls);
     }
     let mut outs = Vec::new();
     for (file, (_, unit)) in files.into_iter().zip(inputs) {
-        outs.push(convert_file(file, unit, variants.clone()));
+        outs.push(convert_file(file, unit, variants.clone(), decls.clone()));
     }
     Ok(outs)
 }
 
-fn convert_file(file: syn::File, unit: &str, variants: Variants) -> Output {
+fn convert_file(file: syn::File, unit: &str, variants: Variants, decls: infer::Decls) -> Output {
     let mut c = Converter {
         out: Output::default(),
         variants,
         imports: HashMap::new(),
         item_findings: 0,
         as_ref_args: HashSet::new(),
+        decls,
+        external: HashMap::new(),
     };
     let summary = doc_summary(&file.attrs).unwrap_or_else(|| "TODO".to_string());
     if file.attrs.iter().any(|a| !is_attr(a, "doc")) {
@@ -1317,6 +1404,9 @@ fn convert_file(file: syn::File, unit: &str, variants: Variants) -> Output {
         c.as_ref_args = as_ref_params_of(&item);
         if let Some(mut i) = c.item(item) {
             Qualify { c: &mut c }.visit_item_mut(&mut i);
+            if c.item_findings == 0 {
+                c.out.items_clean += 1;
+            }
             items.push(i);
         }
     }
