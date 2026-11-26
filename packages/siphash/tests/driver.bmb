@@ -1,0 +1,115 @@
+#[summary("Test driver of the siphash package: standard input is a 16-byte key followed by the message. The first argument names the operation: hash13, hash24, hash128_13, hash128_24 (one call), stream13, stream24, stream128_13, stream128_24 (the message written in pieces whose lengths are the further arguments, the rest last), key (the key read back from a hasher). The result is written as lowercase hex of its little-endian bytes. A bad command line exits with 2")]
+mod driver {
+    #[effects(alloc, io, nondet)]
+    fn main() -> () {
+        let args: Vec<String> = std::env::args();
+        if args.len() < 2 {
+            usage();
+        }
+        let mut input: Vec<u8> = Vec::new();
+        match std::io::read_to_end(&mut input) {
+            Ok(n) => {},
+            Err(e) => usage(),
+        }
+        if input.len() < 16 {
+            usage();
+        }
+        let key: [u8; 16] = [input[0], input[1], input[2], input[3], input[4], input[5], input[6], input[7], input[8], input[9], input[10], input[11], input[12], input[13], input[14], input[15]];
+        let msg: Vec<u8> = part(input.as_slice(), 16, input.len());
+        let op: String = args[1].clone();
+        let r: siphash::Rounds = if op == "hash13" || op == "hash128_13" || op == "stream13" || op == "stream128_13" {
+            siphash::Rounds::Sip13
+        } else {
+            siphash::Rounds::Sip24
+        };
+        let wide: bool = op == "hash128_13" || op == "hash128_24" || op == "stream128_13" || op == "stream128_24";
+        if op == "hash13" || op == "hash24" {
+            let h: siphash::Hasher = siphash::new_with_key(key, r);
+            show64(siphash::hash(h.k0, h.k1, r, msg.as_slice()));
+        } else if op == "hash128_13" || op == "hash128_24" {
+            let h: siphash::Hasher = siphash::new128_with_key(key, r);
+            show128(siphash::hash128(h.k0, h.k1, r, msg.as_slice()));
+        } else if op == "key" {
+            let h: siphash::Hasher = siphash::new_with_key(key, r);
+            let k: [u8; 16] = siphash::key(&h);
+            show(&k);
+        } else if op == "stream13" || op == "stream24" || op == "stream128_13" || op == "stream128_24" {
+            let mut h: siphash::Hasher = if wide {
+                siphash::new128_with_key(key, r)
+            } else {
+                siphash::new_with_key(key, r)
+            };
+            let mut at: usize = 0;
+            let mut a: usize = 2;
+            while a < args.len()
+                invariant at <= msg.len(), siphash::ok(h),
+                decreases args.len() - a,
+            {
+                let len: usize = match std::num::parse_u64(args[a].as_str()) {
+                    None => { usage(); 0 },
+                    Some(x) => { if x > 1048576 { usage(); } x as usize },
+                };
+                if at + len > msg.len() {
+                    usage();
+                }
+                let piece: Vec<u8> = part(msg.as_slice(), at, at + len);
+                siphash::write(&mut h, piece.as_slice());
+                at = at + len;
+                a = a + 1;
+            }
+            let rest: Vec<u8> = part(msg.as_slice(), at, msg.len());
+            siphash::write(&mut h, rest.as_slice());
+            if wide {
+                show128(siphash::finish128(&h));
+            } else {
+                show64(siphash::finish(&h));
+            }
+        } else {
+            usage();
+        }
+    }
+
+    #[summary("The bytes from..to of v as a new vector")]
+    #[effects(alloc)]
+    fn part(v: &[u8], from: usize, to: usize) -> Vec<u8>
+        requires from <= to, to <= v.len(),
+    {
+        let mut out: Vec<u8> = Vec::new();
+        for i in from..to {
+            out.push(v[i]);
+        }
+        out
+    }
+
+    #[summary("Writes the bytes b as lowercase hex")]
+    #[effects(alloc, io)]
+    fn show(b: &[u8]) -> () {
+        let digits: [u8; 16] = [48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 97, 98, 99, 100, 101, 102];
+        let mut out: Vec<u8> = Vec::new();
+        for i in 0..b.len() {
+            out.push(digits[(b[i] >> 4) as usize]);
+            out.push(digits[(b[i] & 15) as usize]);
+        }
+        print_bytes(out.as_slice());
+    }
+
+    #[effects(alloc, io)]
+    fn show128(x: siphash::Hash128) -> () {
+        show64(x.h1);
+        show64(x.h2);
+    }
+
+    #[effects(alloc, io)]
+    fn show64(x: u64) -> () {
+        let b: [u8; 8] = x.to_le_bytes();
+        show(&b);
+    }
+
+    #[effects(io)]
+    fn usage() -> ()
+        ensures false,
+    {
+        eprint_str("usage: driver hash13|hash24|hash128_13|hash128_24|key|stream13|stream24|stream128_13|stream128_24 [LEN].. < key-and-message\n");
+        std::process::exit(2);
+    }
+}
