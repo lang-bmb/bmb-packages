@@ -35,7 +35,7 @@ All of them are stated and proved. `bmb verify` proves the 21 definitions with n
   - The precondition is right as it is: without `%` in the set, a literal `%41` in the input is encoded as itself and decoded to `A`.
 - **The set operations:** `add`/`remove` state for every ASCII byte whether it is in the result; `union` and `complement` the same.
 
-**Proof cost** (bmb-new, Z3 4.15.4): 21 definitions, 173 obligations, total rlimit 1,276,645, the largest single query 58,067, in 1.4 s. The largest definitions are `percent_decode` (340,819), `percent_encode` (326,790) and `round_trip` (214,100). `bmb stability` over seeds 0 to 4 finds no definition whose verdict depends on the seed; the largest spread is 7.29x (`round_trip`, 207,491 to 1,512,036).
+**Proof cost** (the compiler of 2026-11-26, Z3 4.15.4): 21 definitions, 173 obligations, total rlimit 1,276,645, the largest single query 58,067, in 1.4 s. The largest definitions are `percent_decode` (340,819), `percent_encode` (326,790) and `round_trip` (214,100). `bmb stability` over seeds 0 to 4 finds no definition whose verdict depends on the seed; the largest spread is 7.29x (`round_trip`, 207,491 to 1,512,036).
 
 ## What was changed, and why
 

@@ -45,7 +45,7 @@ Wanted and not stated:
 - **`parse(print(v)) == Ok(v)` and `print(parse(t)) == t`.** The first needs a predicate for the versions that are well formed (the grammar of §9 and §10). The second needs to know that the decimal text `std::bytes::push_u64` writes reads back. Its contract only says how much the buffer grows (`grew_by`); `std::num::push_u64`, on `String`, has a round-trip lemma but works on text. Neither statement is made. The tests check `print(parse(t)) == t` on 200 pseudo-random versions and the origin's cases.
 - **Exact contracts of the parsers** beyond `numeric`: the error each malformed input gives is tested, not stated.
 
-**Proof cost** (bmb-new, Z3 4.15.4): 58 definitions (and 8 of `std::bytes`), 485 obligations, total rlimit 2,296,783, the largest single query 45,495, in about 4 s.
+**Proof cost** (the compiler of 2026-11-26, Z3 4.15.4): 58 definitions (and 8 of `std::bytes`), 485 obligations, total rlimit 2,296,783, the largest single query 45,495, in about 4 s.
 
 - The largest definitions are `comparator_at` (461,992), `req_matches` (370,604) and `numeric` (164,212).
 - `bmb stability` over seeds 0 to 4 finds no definition whose verdict depends on the seed; the largest spread is 1.17x.
