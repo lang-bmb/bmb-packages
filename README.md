@@ -18,33 +18,37 @@ BMB is a language with a Rust-shaped surface whose functions carry contracts tha
 
 ```
 packages/<name>/
-  package.json    name, version, summary, units, the std units it uses, origin (crate, version, repository, licence)
+  package.json    name, version, summary, units, the std units it uses, origin (crate, version, repository, licence),
+                  and the test suites (tests: the test units and the case files)
   src/<unit>.bmb  one file per unit, in normal form (bmb fmt)
-  tests/          the origin's tests and vectors as data, the program that runs them, and tests/run.sh;
-                  tests/reference/ (when present) is the Cargo program that computed tests/reference.txt with the origin crate
+  tests/          the test program (tests/driver.bmb) and the origin's tests and vectors as data, in gotgan's
+                  case format ARGS|STDIN|STDOUT (cases.txt, reference.txt); tests/reference/ (when present) is
+                  the Cargo program that computed tests/reference.txt with the origin crate
   ORIGIN.md       where it comes from, its licence and attribution, what was changed in porting and why, what was left out
 ```
 
-Each package is accepted when:
+The packages are checked, proved and tested with [gotgan](https://github.com/lang-bmb/gotgan), the BMB package manager, which reads `package.json`. Each package is accepted when:
 
-1. `bmb verify` proves every definition with no escape hatch (no `assume`, no `#[external_body]`, no unproved termination);
-2. its sources and test programs are in normal form (`bmb fmt --check`);
-3. its tests pass: `tests/run.sh` builds the test program with `bmb build` (which proves it first) and runs it on the data, exiting non-zero on any mismatch.
+1. `gotgan verify` passes: `bmb verify` proves every definition, with no escape hatch (no `assume`, no `#[external_body]`), no trusted definition and no unproved termination, and the standard library units the program reaches are exactly `deps.std`;
+2. `gotgan check` passes: its sources and its test units are in normal form (`bmb fmt --check`) and check;
+3. `gotgan test` passes: for each test suite of `package.json`, it builds the driver with `bmb build` (which proves it first) and runs every case of the case files through it; a case passes when the driver exits with 0 and writes exactly the expected bytes.
 
 ## Checking
 
 ```
-BMB=/path/to/bmb scripts/check.sh          # every package
-BMB=/path/to/bmb scripts/check.sh hex      # one package
+BMB=/path/to/bmb GOTGAN=/path/to/gotgan scripts/check.sh          # every package
+BMB=/path/to/bmb GOTGAN=/path/to/gotgan scripts/check.sh hex      # one package
 ```
 
-`BMB` defaults to `bmb` on `PATH`. Building executables needs `clang` and `llc`, and proving needs `z3`. By hand, for one package:
+`scripts/check.sh` runs `gotgan check`, `gotgan verify` and `gotgan test` on each package, one after another, prints one summary line per command (definitions and obligations proved, cases passed and failed, taken from gotgan's JSON rows) and every failing case in full, and exits non-zero if any command fails. `BMB` and `GOTGAN` default to `bmb` and `gotgan` on `PATH`. gotgan is built from its repository with `bmb build src/*.bmb -o gotgan` (see its README). Building executables needs `clang` and `llc`, and proving needs `z3`. By hand, for one package:
 
 ```
-bmb fmt --check packages/hex/src/hex.bmb
-bmb verify packages/hex/src/hex.bmb
-BMB=bmb packages/hex/tests/run.sh
+gotgan --package packages/hex check
+gotgan --package packages/hex verify
+gotgan --package packages/hex test
 ```
+
+Results are JSON rows on standard output; gotgan writes the test drivers to `packages/<name>/target/gotgan/`.
 
 ## Tools
 

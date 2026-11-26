@@ -24,6 +24,11 @@ fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{:02x}", x)).collect()
 }
 
+/// The case's standard input, the key and then the message, every byte as `\xHH`.
+fn input(key: &[u8], msg: &[u8]) -> String {
+    key.iter().chain(msg).map(|x| format!("\\x{:02x}", x)).collect()
+}
+
 fn one_shot(op: &str, key: &[u8; 16], msg: &[u8]) -> Vec<u8> {
     match op {
         "hash13" => sip::SipHasher13::new_with_key(key).hash(msg).to_le_bytes().to_vec(),
@@ -60,9 +65,9 @@ fn main() {
 
     // The origin's test_hash_simple and test_hash_incremental, which assert no value.
     let key: [u8; 16] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
-    println!("hash13|{}|010203|{}", hex(&key), hex(&one_shot("hash13", &key, &[1, 2, 3])));
-    println!("stream13 3|{}|010203040506|{}", hex(&key), hex(&streamed("stream13", &key, &[&[1, 2, 3], &[4, 5, 6]])));
-    println!("key|{}||{}", hex(&key), hex(&sip::SipHasher13::new_with_key(&key).key()));
+    println!("hash13|{}|{}", input(&key, &[1, 2, 3]), hex(&one_shot("hash13", &key, &[1, 2, 3])));
+    println!("stream13 3|{}|{}", input(&key, &[1, 2, 3, 4, 5, 6]), hex(&streamed("stream13", &key, &[&[1, 2, 3], &[4, 5, 6]])));
+    println!("key|{}|{}", input(&key, &[]), hex(&sip::SipHasher13::new_with_key(&key).key()));
 
     let ops = ["hash13", "hash24", "hash128_13", "hash128_24"];
     for k in 0..400 {
@@ -70,7 +75,7 @@ fn main() {
         let n = if k % 4 == 3 { (g.next() % 1024) as usize } else { (g.next() % 70) as usize };
         let msg = g.bytes(n);
         let op = ops[k % 4];
-        println!("{op}|{}|{}|{}", hex(&key), hex(&msg), hex(&one_shot(op, &key, &msg)));
+        println!("{op}|{}|{}", input(&key, &msg), hex(&one_shot(op, &key, &msg)));
     }
     let sops = ["stream13", "stream24", "stream128_13", "stream128_24"];
     for k in 0..200 {
@@ -96,6 +101,6 @@ fn main() {
         let out = streamed(op, &key, &pieces);
         assert_eq!(out, one_shot(&op.replace("stream", "hash"), &key, &msg));
         let args: String = cuts.iter().map(|c| format!(" {c}")).collect();
-        println!("{op}{args}|{}|{}|{}", hex(&key), hex(&msg), hex(&out));
+        println!("{op}{args}|{}|{}", input(&key, &msg), hex(&out));
     }
 }

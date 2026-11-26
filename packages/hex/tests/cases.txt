@@ -1,9 +1,9 @@
-# Test cases of the hex package, kept as data.
+# Test cases of the hex package, kept as data, in gotgan's case format.
 #
-# One case per line: OPERATION|INPUT|EXPECTED. OPERATION is the command line
-# of tests/driver.bmb (words separated by spaces), INPUT is what it reads on
-# standard input and EXPECTED is what it must write on standard output. INPUT
-# and EXPECTED are written with the escapes of printf %b (\xHH for a byte,
+# One case per line: ARGS|STDIN|STDOUT. ARGS is the command line of
+# tests/driver.bmb (words separated by spaces), STDIN is what it reads on
+# standard input and STDOUT is what it must write on standard output. STDIN
+# and STDOUT are written with the escapes of printf %b (\xHH for a byte,
 # \\ for a backslash, \x7c for |). Lines that start with # are comments.
 
 # ---- From the original crate, src/lib.rs `mod test` ----

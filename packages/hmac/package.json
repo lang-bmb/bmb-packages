@@ -7,6 +7,13 @@
   "deps": {
     "std": ["sha256"]
   },
+  "tests": [
+    {
+      "units": ["driver"],
+      "cases": ["cases.txt", "reference.txt"],
+      "format": "args|stdin|stdout"
+    }
+  ],
   "origin": {
     "crate": "hmac",
     "version": "0.13.0",

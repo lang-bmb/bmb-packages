@@ -7,6 +7,13 @@
   "deps": {
     "std": []
   },
+  "tests": [
+    {
+      "units": ["driver"],
+      "cases": ["cases.txt", "reference.txt"],
+      "format": "args|stdin|stdout"
+    }
+  ],
   "origin": {
     "crate": "siphasher",
     "version": "1.0.4",

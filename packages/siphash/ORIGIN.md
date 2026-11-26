@@ -65,7 +65,7 @@ There is no short specification of SipHash other than the algorithm. The contrac
 
 ## Tests
 
-`tests/run.sh` builds `tests/driver.bmb` with `src/siphash.bmb` (`bmb build`, which proves everything first). It sends each case's key and message, hex in the data, to the executable's standard input, and compares its output with the expected little-endian hex.
+The test suite is declared in `package.json` and run by `gotgan test`. gotgan builds `tests/driver.bmb` with `src/siphash.bmb` (`bmb build`, which proves everything first). Each case (gotgan's format `ARGS|STDIN|STDOUT`) gives the operation as the arguments and the key and the message, written byte for byte as `\xHH`, as the standard input; the output must be the expected little-endian hex.
 
 - `tests/cases.txt`, 260 cases, from the origin's `src/tests.rs` and `src/tests128.rs`:
   - the 64 SipHash-2-4 and 64 SipHash-1-3 vectors of the reference implementation (message `00 01 .. t-1`, key `00 .. 0f`);
@@ -77,7 +77,7 @@ There is no short specification of SipHash other than the algorithm. The contrac
   - 400 one-shot hashes of pseudo-random keys and messages (0 to 1023 bytes, all four variants);
   - 200 incremental hashes with pseudo-random piece lengths, where the generator also checks that the origin's own streaming and one-shot results agree.
 
-Result: 863 passed, 0 failed (about 12 s). A wrong expected value is reported (checked by editing one).
+Result: 863 passed, 0 failed (`gotgan test`, about 7 s). A wrong expected value fails it (checked by editing one).
 
 Not exercised: messages longer than 2^20 bytes in pieces (the driver's limit), and lengths of 2^64 bytes or more. The proof covers every input.
 

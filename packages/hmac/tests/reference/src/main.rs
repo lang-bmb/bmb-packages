@@ -25,6 +25,13 @@ fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{:02x}", x)).collect()
 }
 
+/// One case: the operation with the key and message lengths, then the key, the
+/// message and the tag as the driver's standard input, every byte as `\xHH`.
+fn case(op: &str, key: &[u8], msg: &[u8], tag: &[u8], expected: &str) {
+    let input: String = key.iter().chain(msg).chain(tag).map(|x| format!("\\x{:02x}", x)).collect();
+    println!("{op} {} {}|{input}|{expected}", key.len(), msg.len());
+}
+
 fn mac(key: &[u8], msg: &[u8]) -> Hmac<Sha256> {
     let mut m = <Hmac<Sha256> as KeyInit>::new_from_slice(key).unwrap();
     m.update(msg);
@@ -49,7 +56,7 @@ fn main() {
         let ml = if k % 10 == 9 { (g.next() % 2000) as usize } else { (g.next() % 150) as usize };
         let msg = g.bytes(ml);
         let tag = mac(&key, &msg).finalize().into_bytes();
-        println!("mac|{}|{}||{}", hex(&key), hex(&msg), hex(&tag));
+        case("mac", &key, &msg, &[], &hex(&tag));
     }
     // Every tag length from 0 to 33, the right bytes and with the last byte changed.
     let key = g.bytes(20);
@@ -65,8 +72,8 @@ fn main() {
         }] {
             let s = mac(&key, &msg).verify_slice(&t).is_ok();
             let l = mac(&key, &msg).verify_truncated_left(&t).is_ok();
-            println!("verify_slice|{}|{}|{}|{}", hex(&key), hex(&msg), hex(&t), word(s));
-            println!("verify_truncated_left|{}|{}|{}|{}", hex(&key), hex(&msg), hex(&t), word(l));
+            case("verify_slice", &key, &msg, &t, word(s));
+            case("verify_truncated_left", &key, &msg, &t, word(l));
         }
     }
 }

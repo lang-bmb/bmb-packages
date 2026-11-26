@@ -72,7 +72,7 @@ So the exact statement lives in `mac`'s body, and each step (`key_hash`, `key_bl
 
 ## Tests
 
-`tests/run.sh` builds `tests/driver.bmb` with `src/hmac.bmb` (`bmb build`, which proves everything first). Per case, it sends the key, the message and a tag (hex in the data) to the executable's standard input and their lengths to its command line, and compares its output.
+The test suite is declared in `package.json` and run by `gotgan test`. gotgan builds `tests/driver.bmb` with `src/hmac.bmb` (`bmb build`, which proves everything first). Each case (gotgan's format `ARGS|STDIN|STDOUT`) gives the operation and the key and message lengths as the arguments, and the key, the message and the tag, written byte for byte as `\xHH`, as the standard input; the output must be the expected tag hex, or `ok`/`error`.
 
 - `tests/cases.txt`, 16 cases: RFC 4231 §4 test cases 1 to 7 (HMAC-SHA-256), decoded from the origin's `tests/data/hmac_sha256_rfc4231.blb` with the `blobby` crate.
   - Each tag is computed (`mac`) and verified (`verify_slice`).
@@ -81,7 +81,7 @@ So the exact statement lives in `mac`'s body, and each step (`key_hash`, `key_bl
   - 300 tags for pseudo-random keys (including exactly 64 and 65 bytes, up to 199) and messages (up to 1999 bytes);
   - `verify_slice` and `verify_truncated_left` for every tag length from 0 to 33, with the right bytes and with the last byte changed.
 
-Result: 452 passed, 0 failed (about 7 s). A wrong expected value is reported (checked by editing one).
+Result: 452 passed, 0 failed (`gotgan test`, about 3 s). A wrong expected value fails it (checked by editing one).
 
 Not exercised: keys or messages longer than the driver's 2^20 bytes, and the constant-time property.
 

@@ -63,12 +63,12 @@ No contract that was wanted had to be weakened or dropped for a failed proof. Tw
 
 ## Tests
 
-`tests/run.sh` builds `tests/driver.bmb` with `src/hex.bmb` (`bmb build`, which proves every obligation before it emits code; clang and llc are required) and runs each case of the two data files through the executable, comparing its standard output byte for byte:
+The test suite is declared in `package.json` and run by `gotgan test`. gotgan builds `tests/driver.bmb` with `src/hex.bmb` (`bmb build`, which proves every obligation before it emits code; clang and llc are required) and runs each case of the two case files (gotgan's format `ARGS|STDIN|STDOUT`) through the executable. A case passes when the executable exits with 0 and writes exactly the expected bytes:
 
 - `tests/cases.txt`: the origin's tests (`src/lib.rs` `mod test`, `src/error.rs` `mod tests`), the examples of the origin's documentation and the RFC 4648 §10 BASE16 vectors, 47 cases.
 - `tests/reference.txt`: 753 cases over every byte value (encode, encode_upper, decode both cases, round trip, both slice functions, and the `Debug` and `Display` text of the error for every byte that is not a digit: Debug at index 0 and 1, Display at index 0), with the expected results computed by the Rust standard library (`tests/reference.rs`), not by the port.
 
-Result: 800 passed, 0 failed. Not exercised: the origin's `test_gen_iter` (it tests the private iterator `generate_iter`, which has no counterpart); inputs longer than the driver's 2^20-byte output buffer or near the `fits` bound; allocation failure. The proof covers every input, the tests cover the listed ones.
+Result: 800 passed, 0 failed (`gotgan test`, about 3 s). Not exercised: the origin's `test_gen_iter` (it tests the private iterator `generate_iter`, which has no counterpart); inputs longer than the driver's 2^20-byte output buffer or near the `fits` bound; allocation failure. The proof covers every input, the tests cover the listed ones.
 
 ## The rewriting tool on this crate
 
