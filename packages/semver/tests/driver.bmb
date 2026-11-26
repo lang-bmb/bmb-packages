@@ -1,0 +1,105 @@
+#[summary("Test driver of the semver package. The first argument is the operation: version reads a version on standard input and writes it back (Display), fields writes its parts as major.minor.patch pre=.. build=.., req and comparator read a requirement or a comparator and write it back, pre and build read a pre-release or build metadata and write it back; an error is written as error: and the origin's message. cmp A B and precedence A B write <, = or > for two versions given as arguments, matches V writes true or false for the version V and the requirement on standard input, matches_comparator V the same for a comparator. A bad command line exits with 2")]
+mod driver {
+    #[effects(alloc, io)]
+    fn fail(e: semver::Error) -> () {
+        print_str("error: ");
+        let m: Vec<u8> = semver::message(e);
+        print_bytes(m.as_slice());
+    }
+
+    #[effects(alloc, io, nondet)]
+    fn main() -> () {
+        let args: Vec<String> = std::env::args();
+        if args.len() < 2 {
+            usage();
+        }
+        let mut input: Vec<u8> = Vec::new();
+        match std::io::read_to_end(&mut input) {
+            Ok(n) => {},
+            Err(ioe) => usage(),
+        }
+        let op: String = args[1].clone();
+        if op == "version" || op == "fields" {
+            match semver::parse_version(input.as_slice()) {
+                Ok(v) => { if op == "version" { let t: Vec<u8> = semver::print_version(&v); print_bytes(t.as_slice()); } else { let mut t: Vec<u8> = Vec::new(); std::bytes::push_u64(&mut t, v.major); t.push(b'.'); std::bytes::push_u64(&mut t, v.minor); t.push(b'.'); std::bytes::push_u64(&mut t, v.patch); semver::push_text(&mut t, b" pre="); semver::append(&mut t, v.pre.as_slice()); semver::push_text(&mut t, b" build="); semver::append(&mut t, v.build.as_slice()); print_bytes(t.as_slice()); } },
+                Err(e) => fail(e),
+            }
+        } else if op == "req" {
+            match semver::parse_req(input.as_slice()) {
+                Ok(req) => { let t: Vec<u8> = semver::print_req(&req); print_bytes(t.as_slice()); },
+                Err(e) => fail(e),
+            }
+        } else if op == "comparator" {
+            match semver::parse_comparator(input.as_slice()) {
+                Ok(c) => { let mut t: Vec<u8> = Vec::new(); semver::print_comparator(&mut t, &c); print_bytes(t.as_slice()); },
+                Err(e) => fail(e),
+            }
+        } else if op == "pre" || op == "build" {
+            let parsed: Result<Vec<u8>, semver::Error> = if op == "pre" {
+                semver::parse_prerelease(input.as_slice())
+            } else {
+                semver::parse_build(input.as_slice())
+            };
+            match parsed {
+                Ok(t) => print_bytes(t.as_slice()),
+                Err(e) => fail(e),
+            }
+        } else if op == "matches" || op == "matches_comparator" {
+            if args.len() != 3 {
+                usage();
+            }
+            let v: semver::Version = version_of(args[2].as_bytes());
+            if op == "matches" {
+                match semver::parse_req(input.as_slice()) {
+                    Ok(req) => { if semver::req_matches(&req, &v) { print_str("true"); } else { print_str("false"); } },
+                    Err(e) => fail(e),
+                }
+            } else {
+                match semver::parse_comparator(input.as_slice()) {
+                    Ok(c) => { if semver::comparator_matches(&c, &v) { print_str("true"); } else { print_str("false"); } },
+                    Err(e) => fail(e),
+                }
+            }
+        } else if op == "cmp" || op == "precedence" {
+            if args.len() != 4 {
+                usage();
+            }
+            let a: semver::Version = version_of(args[2].as_bytes());
+            let b: semver::Version = version_of(args[3].as_bytes());
+            if op == "cmp" {
+                order(semver::cmp(&a, &b));
+            } else {
+                order(semver::cmp_precedence(&a, &b));
+            }
+        } else {
+            usage();
+        }
+    }
+
+    #[effects(alloc, io)]
+    fn order(c: i8) -> () {
+        if c < 0 {
+            print_str("<");
+        } else if c > 0 {
+            print_str(">");
+        } else {
+            print_str("=");
+        }
+    }
+
+    #[effects(io)]
+    fn usage() -> ()
+        ensures false,
+    {
+        eprint_str("usage: driver version|fields|req|comparator|pre|build|matches V|matches_comparator V|cmp A B|precedence A B\n");
+        std::process::exit(2);
+    }
+
+    #[effects(alloc, io)]
+    fn version_of(t: &[u8]) -> semver::Version {
+        match semver::parse_version(t) {
+            Ok(v) => v,
+            Err(e) => { eprint_str("driver: not a version\n"); usage(); semver::Version { major: 0, minor: 0, patch: 0, pre: Vec::new(), build: Vec::new() } },
+        }
+    }
+}

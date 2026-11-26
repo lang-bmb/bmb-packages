@@ -1,0 +1,1388 @@
+#[summary("semver: semantic versions (SemVer 2.0.0) and version requirements as Cargo reads them, ported from the Rust crate semver 1.0.28")]
+mod semver {
+    #[summary("One comparator of a version requirement: an operator and a partial version")]
+    struct Comparator { op: Op, major: u64, minor: Option<u64>, patch: Option<u64>, pre: Vec<u8> }
+
+    #[summary("Why parsing failed. A character is kept as its Unicode scalar value")]
+    enum Error { Empty, UnexpectedEnd(Position), UnexpectedChar(Position, u32), UnexpectedCharAfter(Position, u32), ExpectedCommaFound(Position, u32), LeadingZero(Position), Overflow(Position), EmptySegment(Position), IllegalCharacter(Position), WildcardNotTheOnlyComparator(u8), UnexpectedAfterWildcard, ExcessiveComparators }
+
+    #[summary("A number read from text and the position after it")]
+    struct Num { value: u64, end: usize }
+
+    #[summary("The operator of a comparator")]
+    enum Op { Exact, Greater, GreaterEq, Less, LessEq, Tilde, Caret, Wildcard }
+
+    #[summary("A comparator read from text, the position the last error would name, and the position after it")]
+    struct Parsed { comparator: Comparator, pos: Position, rest: usize }
+
+    #[summary("Where in a version or comparator a parse error happened")]
+    enum Position { Major, Minor, Patch, Pre, Build }
+
+    #[summary("A version: major.minor.patch, a pre-release (empty for none) and build metadata (empty for none), the two kept as their text")]
+    struct Version { major: u64, minor: u64, patch: u64, pre: Vec<u8>, build: Vec<u8> }
+
+    #[summary("A version requirement: the comparators a version must all match (none for *)")]
+    struct VersionReq { comparators: Vec<Comparator> }
+
+    #[summary("s[i..e] is all digits")]
+    spec fn all_digits(s: &[u8], i: usize, e: usize) -> bool
+        decreases e - i,
+    {
+        if i >= e || e > s.len() {
+            true
+        } else {
+            digit(s[i]) && all_digits(s, i + 1, e)
+        }
+    }
+
+    #[summary("Appends the bytes of s")]
+    #[effects(alloc)]
+    fn append(v: &mut Vec<u8>, s: &[u8]) -> ()
+        ensures v.len() == old(v).len() + s.len(),
+    {
+        for i in 0..s.len()
+            invariant v.len() == old(v).len() + i,
+        {
+            v.push(s[i]);
+        }
+    }
+
+    spec fn bcmp(a: &[u8], i: usize, b: &[u8], j: usize) -> i8
+        decreases a.len() + 1 - i,
+    {
+        if i > a.len() {
+            if j > b.len() {
+                0
+            } else {
+                -1
+            }
+        } else if j > b.len() {
+            1
+        } else if seg_end(a, i) < i || seg_end(a, i) > a.len() || seg_end(b, j) < j || seg_end(b, j) > b.len() {
+            0
+        } else if bidcmp(a, i, seg_end(a, i), b, j, seg_end(b, j)) != 0 {
+            bidcmp(a, i, seg_end(a, i), b, j, seg_end(b, j))
+        } else {
+            bcmp(a, seg_end(a, i) + 1, b, seg_end(b, j) + 1)
+        }
+    }
+
+    #[summary("The order of two build identifiers: numeric ones by value (leading zeros dropped) and then by length, numeric before alphanumeric, alphanumeric ones by bytes")]
+    spec fn bidcmp(a: &[u8], i: usize, ea: usize, b: &[u8], j: usize, eb: usize) -> i8 {
+        if all_digits(a, i, ea) && all_digits(b, j, eb) {
+            if ea - skip0(a, i, ea) < eb - skip0(b, j, eb) {
+                -1
+            } else if ea - skip0(a, i, ea) > eb - skip0(b, j, eb) {
+                1
+            } else if lex(a, skip0(a, i, ea), ea, b, skip0(b, j, eb), eb) != 0 {
+                lex(a, skip0(a, i, ea), ea, b, skip0(b, j, eb), eb)
+            } else if ea - i < eb - j {
+                -1
+            } else if ea - i > eb - j {
+                1
+            } else {
+                0
+            }
+        } else if all_digits(a, i, ea) {
+            -1
+        } else if all_digits(b, j, eb) {
+            1
+        } else {
+            lex(a, i, ea, b, j, eb)
+        }
+    }
+
+    #[summary("The origin's order of build metadata: identifier by identifier, an empty build lowest")]
+    spec fn build_order(a: &[u8], b: &[u8]) -> i8 {
+        if a.len() == 0 && b.len() == 0 {
+            0
+        } else if a.len() == 0 {
+            -1
+        } else if b.len() == 0 {
+            1
+        } else {
+            bcmp(a, 0, b, 0)
+        }
+    }
+
+    #[effects(pure)]
+    #[uses(same)]
+    fn bytes_eq(a: &[u8], b: &[u8]) -> (r: bool)
+        ensures r == same(a, b),
+    {
+        if a.len() != b.len() {
+            return false;
+        }
+        for k in 0..a.len()
+            invariant a.len() == b.len(), forall|q: usize| q < k ==> #[trigger] a[q] == b[q],
+        {
+            if a[k] != b[k] {
+                return false;
+            }
+        }
+        true
+    }
+
+    #[summary("The Unicode scalar value of the character starting at i (s is UTF-8 text)")]
+    #[effects(pure)]
+    fn char_at(s: &[u8], i: usize) -> u32
+        requires i < s.len(),
+    {
+        let b0: u32 = s[i] as u32;
+        if b0 < 128 {
+            b0
+        } else if b0 >= 224 && b0 < 240 && i + 2 < s.len() {
+            (b0 & 15) << 12 | (s[i + 1] as u32 & 63) << 6 | s[i + 2] as u32 & 63
+        } else if b0 >= 240 && i + 3 < s.len() {
+            (b0 & 7) << 18 | (s[i + 1] as u32 & 63) << 12 | (s[i + 2] as u32 & 63) << 6 | s[i + 3] as u32 & 63
+        } else if i + 1 < s.len() {
+            (b0 & 31) << 6 | s[i + 1] as u32 & 63
+        } else {
+            b0
+        }
+    }
+
+    #[summary("The order of a and b, -1, 0 or 1 (the origin's Ord for Version)")]
+    #[effects(pure)]
+    #[uses(version_order)]
+    fn cmp(a: &Version, b: &Version) -> (r: i8)
+        ensures r == version_order(a, b),
+    {
+        let p: i8 = cmp_precedence(a, b);
+        if p != 0 {
+            p
+        } else {
+            compare_build(a.build.as_slice(), b.build.as_slice())
+        }
+    }
+
+    #[summary("The precedence of a and b, -1, 0 or 1 (the origin's cmp_precedence)")]
+    #[effects(pure)]
+    #[uses(num_order, precedence)]
+    fn cmp_precedence(a: &Version, b: &Version) -> (r: i8)
+        ensures r == precedence(a, b),
+    {
+        if a.major != b.major {
+            if a.major < b.major {
+                -1
+            } else {
+                1
+            }
+        } else if a.minor != b.minor {
+            if a.minor < b.minor {
+                -1
+            } else {
+                1
+            }
+        } else if a.patch != b.patch {
+            if a.patch < b.patch {
+                -1
+            } else {
+                1
+            }
+        } else {
+            compare_pre(a.pre.as_slice(), b.pre.as_slice())
+        }
+    }
+
+    #[summary("Reads one comparator at a (the origin's comparator): an operator, a partial version, an optional pre-release and build metadata, and the spaces after it")]
+    #[effects(alloc)]
+    #[uses(digits, read_num)]
+    fn comparator_at(s: &[u8], a: usize) -> (r: Result<Parsed, Error>)
+        requires a <= s.len(),
+        ensures match r { Ok(q) => q.rest <= s.len(), Err(x) => true, },
+    {
+        let mut op: Op = Op::Caret;
+        let mut t: usize = a;
+        if a < s.len() && s[a] == b'=' {
+            op = Op::Exact;
+            t = a + 1;
+        } else if a < s.len() && s[a] == b'>' {
+            if a + 1 < s.len() && s[a + 1] == b'=' {
+                op = Op::GreaterEq;
+                t = a + 2;
+            } else {
+                op = Op::Greater;
+                t = a + 1;
+            }
+        } else if a < s.len() && s[a] == b'<' {
+            if a + 1 < s.len() && s[a + 1] == b'=' {
+                op = Op::LessEq;
+                t = a + 2;
+            } else {
+                op = Op::Less;
+                t = a + 1;
+            }
+        } else if a < s.len() && s[a] == b'~' {
+            op = Op::Tilde;
+            t = a + 1;
+        } else if a < s.len() && s[a] == b'^' {
+            op = Op::Caret;
+            t = a + 1;
+        }
+        let default_op: bool = t == a;
+        t = skip_spaces(s, t);
+        let mut pos: Position = Position::Major;
+        let major: Num = numeric(s, t, Position::Major)?;
+        t = major.end;
+        let mut has_wildcard: bool = false;
+        let mut minor: Option<u64> = None;
+        if t < s.len() && s[t] == b'.' {
+            pos = Position::Minor;
+            if wildcard_at(s, t + 1) {
+                has_wildcard = true;
+                if default_op {
+                    op = Op::Wildcard;
+                }
+                t = t + 2;
+            } else {
+                let n: Num = numeric(s, t + 1, Position::Minor)?;
+                minor = Some(n.value);
+                t = n.end;
+            }
+        }
+        let mut patch: Option<u64> = None;
+        if t < s.len() && s[t] == b'.' {
+            pos = Position::Patch;
+            if wildcard_at(s, t + 1) {
+                if default_op {
+                    op = Op::Wildcard;
+                }
+                t = t + 2;
+            } else if has_wildcard {
+                return Err(Error::UnexpectedAfterWildcard);
+            } else {
+                let n: Num = numeric(s, t + 1, Position::Patch)?;
+                patch = Some(n.value);
+                t = n.end;
+            }
+        }
+        let has_patch: bool = match patch {
+            None => false,
+            Some(p) => true,
+        };
+        let mut pre: Vec<u8> = Vec::new();
+        if has_patch && t < s.len() && s[t] == b'-' {
+            pos = Position::Pre;
+            let e: usize = identifier(s, t + 1, Position::Pre)?;
+            if e == t + 1 {
+                return Err(Error::EmptySegment(Position::Pre));
+            }
+            pre = copy(s, t + 1, e);
+            t = e;
+        }
+        if has_patch && t < s.len() && s[t] == b'+' {
+            pos = Position::Build;
+            let e: usize = identifier(s, t + 1, Position::Build)?;
+            if e == t + 1 {
+                return Err(Error::EmptySegment(Position::Build));
+            }
+            t = e;
+        }
+        t = skip_spaces(s, t);
+        Ok(Parsed { comparator: Comparator { op: op, major: major.value, minor: minor, patch: patch, pre: pre }, pos: pos, rest: t })
+    }
+
+    #[summary("Whether v matches the comparator c (the origin's Comparator::matches)")]
+    #[effects(pure)]
+    #[uses(matches_comparator)]
+    fn comparator_matches(c: &Comparator, v: &Version) -> (r: bool)
+        ensures r == matches_comparator(c, v),
+    {
+        matches_op(c, v) && (v.pre.len() == 0 || pre_is_compatible(c, v))
+    }
+
+    #[summary("The origin's order of build metadata, -1, 0 or 1")]
+    #[effects(pure)]
+    #[uses(bcmp, build_order)]
+    fn compare_build(a: &[u8], b: &[u8]) -> (r: i8)
+        ensures r == build_order(a, b),
+    {
+        if a.len() == 0 && b.len() == 0 {
+            return 0;
+        }
+        if a.len() == 0 {
+            return -1;
+        }
+        if b.len() == 0 {
+            return 1;
+        }
+        let mut i: usize = 0;
+        let mut j: usize = 0;
+        while i <= a.len()
+            invariant j <= b.len() + 1, build_order(a, b) == bcmp(a, i, b, j),
+            decreases a.len() + 1 - i,
+        {
+            if j > b.len() {
+                return 1;
+            }
+            let ea: usize = segment_end(a, i);
+            let eb: usize = segment_end(b, j);
+            let c: i8 = compare_build_ident(a, i, ea, b, j, eb);
+            if c != 0 {
+                return c;
+            }
+            i = ea + 1;
+            j = eb + 1;
+        }
+        if j > b.len() {
+            0
+        } else {
+            -1
+        }
+    }
+
+    #[effects(pure)]
+    #[uses(bidcmp)]
+    fn compare_build_ident(a: &[u8], i: usize, ea: usize, b: &[u8], j: usize, eb: usize) -> (r: i8)
+        requires i <= ea, ea <= a.len(), j <= eb, eb <= b.len(),
+        ensures r == bidcmp(a, i, ea, b, j, eb),
+    {
+        let na: bool = is_numeric(a, i, ea);
+        let nb: bool = is_numeric(b, j, eb);
+        if na && nb {
+            let sa: usize = skip_zeros(a, i, ea);
+            let sb: usize = skip_zeros(b, j, eb);
+            if ea - sa < eb - sb {
+                -1
+            } else if ea - sa > eb - sb {
+                1
+            } else {
+                let c: i8 = compare_bytes(a, sa, ea, b, sb, eb);
+                if c != 0 {
+                    c
+                } else if ea - i < eb - j {
+                    -1
+                } else if ea - i > eb - j {
+                    1
+                } else {
+                    0
+                }
+            }
+        } else if na {
+            -1
+        } else if nb {
+            1
+        } else {
+            compare_bytes(a, i, ea, b, j, eb)
+        }
+    }
+
+    #[summary("The byte order of a[i..ea] and b[j..eb]")]
+    #[effects(pure)]
+    #[uses(lex)]
+    fn compare_bytes(a: &[u8], i: usize, ea: usize, b: &[u8], j: usize, eb: usize) -> (r: i8)
+        requires i <= ea, ea <= a.len(), j <= eb, eb <= b.len(),
+        ensures r == lex(a, i, ea, b, j, eb),
+    {
+        let mut p: usize = i;
+        let mut q: usize = j;
+        while p < ea && q < eb
+            invariant i <= p, p <= ea, j <= q, q <= eb, p - i == q - j, lex(a, i, ea, b, j, eb) == lex(a, p, ea, b, q, eb),
+            decreases ea - p,
+        {
+            if a[p] < b[q] {
+                return -1;
+            }
+            if a[p] > b[q] {
+                return 1;
+            }
+            p = p + 1;
+            q = q + 1;
+        }
+        if p < ea {
+            1
+        } else if q < eb {
+            -1
+        } else {
+            0
+        }
+    }
+
+    #[summary("The order of two pre-release identifiers")]
+    #[effects(pure)]
+    #[uses(idcmp)]
+    fn compare_ident(a: &[u8], i: usize, ea: usize, b: &[u8], j: usize, eb: usize) -> (r: i8)
+        requires i <= ea, ea <= a.len(), j <= eb, eb <= b.len(),
+        ensures r == idcmp(a, i, ea, b, j, eb),
+    {
+        let na: bool = is_numeric(a, i, ea);
+        let nb: bool = is_numeric(b, j, eb);
+        if na && nb {
+            if ea - i < eb - j {
+                -1
+            } else if ea - i > eb - j {
+                1
+            } else {
+                compare_bytes(a, i, ea, b, j, eb)
+            }
+        } else if na {
+            -1
+        } else if nb {
+            1
+        } else {
+            compare_bytes(a, i, ea, b, j, eb)
+        }
+    }
+
+    #[summary("The order of two pre-releases, -1, 0 or 1 (the origin's Ord for Prerelease)")]
+    #[effects(pure)]
+    #[uses(pcmp, pre_order)]
+    fn compare_pre(a: &[u8], b: &[u8]) -> (r: i8)
+        ensures r == pre_order(a, b),
+    {
+        if a.len() == 0 && b.len() == 0 {
+            return 0;
+        }
+        if a.len() == 0 {
+            return 1;
+        }
+        if b.len() == 0 {
+            return -1;
+        }
+        let mut i: usize = 0;
+        let mut j: usize = 0;
+        while i <= a.len()
+            invariant j <= b.len() + 1, pre_order(a, b) == pcmp(a, i, b, j),
+            decreases a.len() + 1 - i,
+        {
+            if j > b.len() {
+                return 1;
+            }
+            let ea: usize = segment_end(a, i);
+            let eb: usize = segment_end(b, j);
+            let c: i8 = compare_ident(a, i, ea, b, j, eb);
+            if c != 0 {
+                return c;
+            }
+            i = ea + 1;
+            j = eb + 1;
+        }
+        if j > b.len() {
+            0
+        } else {
+            -1
+        }
+    }
+
+    #[summary("The bytes s[a..e]")]
+    #[effects(alloc)]
+    fn copy(s: &[u8], a: usize, e: usize) -> (r: Vec<u8>)
+        requires a <= e, e <= s.len(),
+        ensures r.len() == e - a,
+    {
+        let mut v: Vec<u8> = Vec::new();
+        for i in a..e
+            invariant v.len() == i - a,
+        {
+            v.push(s[i]);
+        }
+        v
+    }
+
+    #[summary("The value of the decimal digits s[a..n]")]
+    spec fn dec(s: &[u8], a: usize, n: usize) -> u64
+        decreases n,
+    {
+        if n <= a || n > s.len() {
+            0
+        } else {
+            let d: u64 = s[n - 1] as u64;
+            dec(s, a, n - 1) * 10 + d - 48
+        }
+    }
+
+    spec fn digit(c: u8) -> bool {
+        48 <= c && c <= 57
+    }
+
+    spec fn digits(s: &[u8], a: usize, n: usize) -> bool {
+        a <= n && n <= s.len() && (forall|k: usize| a <= k && k < n ==> digit(#[trigger] s[k]))
+    }
+
+    #[summary("The position after the dot at a")]
+    #[effects(pure)]
+    fn dot(s: &[u8], a: usize, pos: Position) -> (r: Result<usize, Error>)
+        requires a <= s.len(),
+        ensures match r { Ok(e) => e == a + 1 && e <= s.len() && s[a] == 46, Err(x) => true, },
+    {
+        if a < s.len() && s[a] == b'.' {
+            Ok(a + 1)
+        } else if a < s.len() {
+            Err(Error::UnexpectedCharAfter(pos, char_at(s, a)))
+        } else {
+            Err(Error::UnexpectedEnd(pos))
+        }
+    }
+
+    #[summary("The order of two pre-release identifiers: numeric ones by length and then by digits, numeric before alphanumeric, alphanumeric ones by bytes")]
+    spec fn idcmp(a: &[u8], i: usize, ea: usize, b: &[u8], j: usize, eb: usize) -> i8 {
+        if all_digits(a, i, ea) && all_digits(b, j, eb) {
+            if ea - i < eb - j {
+                -1
+            } else if ea - i > eb - j {
+                1
+            } else {
+                lex(a, i, ea, b, j, eb)
+            }
+        } else if all_digits(a, i, ea) {
+            -1
+        } else if all_digits(b, j, eb) {
+            1
+        } else {
+            lex(a, i, ea, b, j, eb)
+        }
+    }
+
+    #[uses(idcmp)]
+    proof fn idcmp_anti(a: &[u8], i: usize, ea: usize, b: &[u8], j: usize, eb: usize)
+        ensures idcmp(a, i, ea, b, j, eb) == -idcmp(b, j, eb, a, i, ea),
+    {
+        lex_anti(a, i, ea, b, j, eb);
+    }
+
+    spec fn ident_byte(c: u8) -> bool {
+        65 <= c && c <= 90 || 97 <= c && c <= 122 || c == 45 || digit(c)
+    }
+
+    #[summary("The end of the dot-separated identifier at a (the origin's identifier): a itself when there is none")]
+    #[effects(pure)]
+    fn identifier(s: &[u8], a: usize, pos: Position) -> (r: Result<usize, Error>)
+        requires a <= s.len(),
+        ensures match r { Ok(e) => a <= e && e <= s.len(), Err(x) => true, },
+    {
+        let mut acc: usize = 0;
+        let mut seg: usize = 0;
+        let mut nondigit: bool = false;
+        loop
+            invariant a + acc + seg <= s.len(),
+            decreases s.len() - a - acc - seg,
+        {
+            let at: usize = a + acc + seg;
+            let c: u8 = if at < s.len() {
+                s[at]
+            } else {
+                0
+            };
+            let more: bool = at < s.len();
+            if more && (c >= b'A' && c <= b'Z' || c >= b'a' && c <= b'z' || c == b'-') {
+                seg = seg + 1;
+                nondigit = true;
+            } else if more && c >= b'0' && c <= b'9' {
+                seg = seg + 1;
+            } else {
+                let dot: bool = more && c == b'.';
+                if seg == 0 {
+                    if acc == 0 && !dot {
+                        return Ok(a);
+                    } else {
+                        return Err(Error::EmptySegment(pos));
+                    }
+                }
+                let is_pre: bool = match pos {
+                    Position::Major => false,
+                    Position::Minor => false,
+                    Position::Patch => false,
+                    Position::Pre => true,
+                    Position::Build => false,
+                };
+                if is_pre && seg > 1 && !nondigit && s[a + acc] == b'0' {
+                    return Err(Error::LeadingZero(pos));
+                }
+                acc = acc + seg;
+                if dot {
+                    if a + acc + 1 > s.len() {
+                        return Err(Error::EmptySegment(pos));
+                    }
+                    acc = acc + 1;
+                    seg = 0;
+                    nondigit = false;
+                } else {
+                    return Ok(a + acc);
+                }
+            }
+        }
+    }
+
+    #[summary("Whether s[i..e] is all digits")]
+    #[effects(pure)]
+    #[uses(all_digits, digit)]
+    fn is_numeric(s: &[u8], i: usize, e: usize) -> (r: bool)
+        requires i <= e, e <= s.len(),
+        ensures r == all_digits(s, i, e),
+    {
+        let mut k: usize = i;
+        while k < e
+            invariant i <= k, k <= e, all_digits(s, i, e) == all_digits(s, k, e),
+            decreases e - k,
+        {
+            if s[k] < b'0' || s[k] > b'9' {
+                return false;
+            }
+            k = k + 1;
+        }
+        true
+    }
+
+    #[summary("The byte order of a[i..ea] and b[j..eb]: -1, 0 or 1")]
+    spec fn lex(a: &[u8], i: usize, ea: usize, b: &[u8], j: usize, eb: usize) -> i8
+        decreases ea - i,
+    {
+        if i >= ea || ea > a.len() {
+            if j >= eb || eb > b.len() {
+                0
+            } else {
+                -1
+            }
+        } else if j >= eb || eb > b.len() {
+            1
+        } else if a[i] < b[j] {
+            -1
+        } else if a[i] > b[j] {
+            1
+        } else {
+            lex(a, i + 1, ea, b, j + 1, eb)
+        }
+    }
+
+    #[uses(lex)]
+    proof fn lex_anti(a: &[u8], i: usize, ea: usize, b: &[u8], j: usize, eb: usize)
+        ensures lex(a, i, ea, b, j, eb) == -lex(b, j, eb, a, i, ea),
+        decreases ea - i,
+    {
+        if i < ea && ea <= a.len() && j < eb && eb <= b.len() && a[i] == b[j] {
+            lex_anti(a, i + 1, ea, b, j + 1, eb);
+        }
+    }
+
+    #[uses(lex)]
+    proof fn lex_refl(a: &[u8], i: usize, ea: usize)
+        ensures lex(a, i, ea, a, i, ea) == 0,
+        decreases ea - i,
+    {
+        if i < ea && ea <= a.len() {
+            lex_refl(a, i + 1, ea);
+        }
+    }
+
+    #[summary("v matches c read as ^: no change in the leftmost part of c that is not zero, and not below c")]
+    spec fn m_caret(c: &Comparator, v: &Version) -> bool {
+        v.major == c.major && (match c.minor { None => true, Some(mi) => match c.patch { None => if c.major > 0 { v.minor >= mi } else { v.minor == mi }, Some(pa) => if c.major > 0 { if v.minor != mi { v.minor > mi } else if v.patch != pa { v.patch > pa } else { pre_order(v.pre.as_slice(), c.pre.as_slice()) >= 0 } } else if mi > 0 { v.minor == mi && (if v.patch != pa { v.patch > pa } else { pre_order(v.pre.as_slice(), c.pre.as_slice()) >= 0 }) } else { v.minor == mi && v.patch == pa && pre_order(v.pre.as_slice(), c.pre.as_slice()) >= 0 }, }, })
+    }
+
+    #[summary("v matches the comparator c read as =: the parts c has are equal, and so are the pre-releases")]
+    spec fn m_exact(c: &Comparator, v: &Version) -> bool {
+        v.major == c.major && opt_is(c.minor, v.minor) && opt_is(c.patch, v.patch) && same(v.pre.as_slice(), c.pre.as_slice())
+    }
+
+    #[summary("v is above c, read as >: the first part that differs decides; a part c leaves out does not")]
+    spec fn m_greater(c: &Comparator, v: &Version) -> bool {
+        if v.major != c.major {
+            v.major > c.major
+        } else {
+            match c.minor {
+                None => false,
+                Some(mi) => if v.minor != mi { v.minor > mi } else { match c.patch { None => false, Some(pa) => if v.patch != pa { v.patch > pa } else { pre_order(v.pre.as_slice(), c.pre.as_slice()) == 1 }, } },
+            }
+        }
+    }
+
+    #[summary("v is below c, read as <")]
+    spec fn m_less(c: &Comparator, v: &Version) -> bool {
+        if v.major != c.major {
+            v.major < c.major
+        } else {
+            match c.minor {
+                None => false,
+                Some(mi) => if v.minor != mi { v.minor < mi } else { match c.patch { None => false, Some(pa) => if v.patch != pa { v.patch < pa } else { pre_order(v.pre.as_slice(), c.pre.as_slice()) == -1 }, } },
+            }
+        }
+    }
+
+    #[summary("v matches the operator and version of c, before the pre-release rule")]
+    spec fn m_op(c: &Comparator, v: &Version) -> bool {
+        match c.op {
+            Op::Exact => m_exact(c, v),
+            Op::Greater => m_greater(c, v),
+            Op::GreaterEq => m_exact(c, v) || m_greater(c, v),
+            Op::Less => m_less(c, v),
+            Op::LessEq => m_exact(c, v) || m_less(c, v),
+            Op::Tilde => m_tilde(c, v),
+            Op::Caret => m_caret(c, v),
+            Op::Wildcard => m_exact(c, v),
+        }
+    }
+
+    #[summary("v matches c read as ~: the same major and the minor c gives, and not below c")]
+    spec fn m_tilde(c: &Comparator, v: &Version) -> bool {
+        v.major == c.major && opt_is(c.minor, v.minor) && (match c.patch { None => pre_order(v.pre.as_slice(), c.pre.as_slice()) >= 0, Some(pa) => if v.patch != pa { v.patch > pa } else { pre_order(v.pre.as_slice(), c.pre.as_slice()) >= 0 }, })
+    }
+
+    #[effects(pure)]
+    #[uses(m_caret)]
+    fn matches_caret(c: &Comparator, v: &Version) -> (r: bool)
+        ensures r == m_caret(c, v),
+    {
+        if v.major != c.major {
+            return false;
+        }
+        match c.minor {
+            None => true,
+            Some(mi) => match c.patch { None => { if c.major > 0 { v.minor >= mi } else { v.minor == mi } }, Some(pa) => { if c.major > 0 { if v.minor != mi { return v.minor > mi; } else if v.patch != pa { return v.patch > pa; } } else if mi > 0 { if v.minor != mi { return false; } else if v.patch != pa { return v.patch > pa; } } else if v.minor != mi || v.patch != pa { return false; } compare_pre(v.pre.as_slice(), c.pre.as_slice()) >= 0 }, },
+        }
+    }
+
+    #[summary("v matches the comparator c (the origin's Comparator::matches)")]
+    spec fn matches_comparator(c: &Comparator, v: &Version) -> bool {
+        m_op(c, v) && (v.pre.len() == 0 || pre_ok(c, v))
+    }
+
+    #[effects(pure)]
+    #[uses(m_exact, opt_is)]
+    fn matches_exact(c: &Comparator, v: &Version) -> (r: bool)
+        ensures r == m_exact(c, v),
+    {
+        if v.major != c.major {
+            return false;
+        }
+        match c.minor {
+            None => {},
+            Some(mi) => { if v.minor != mi { return false; } },
+        }
+        match c.patch {
+            None => {},
+            Some(pa) => { if v.patch != pa { return false; } },
+        }
+        bytes_eq(v.pre.as_slice(), c.pre.as_slice())
+    }
+
+    #[effects(pure)]
+    #[uses(m_greater)]
+    fn matches_greater(c: &Comparator, v: &Version) -> (r: bool)
+        ensures r == m_greater(c, v),
+    {
+        if v.major != c.major {
+            return v.major > c.major;
+        }
+        match c.minor {
+            None => false,
+            Some(mi) => { if v.minor != mi { v.minor > mi } else { match c.patch { None => false, Some(pa) => { if v.patch != pa { v.patch > pa } else { compare_pre(v.pre.as_slice(), c.pre.as_slice()) == 1 } }, } } },
+        }
+    }
+
+    #[effects(pure)]
+    #[uses(m_less)]
+    fn matches_less(c: &Comparator, v: &Version) -> (r: bool)
+        ensures r == m_less(c, v),
+    {
+        if v.major != c.major {
+            return v.major < c.major;
+        }
+        match c.minor {
+            None => false,
+            Some(mi) => { if v.minor != mi { v.minor < mi } else { match c.patch { None => false, Some(pa) => { if v.patch != pa { v.patch < pa } else { compare_pre(v.pre.as_slice(), c.pre.as_slice()) == -1 } }, } } },
+        }
+    }
+
+    #[effects(pure)]
+    #[uses(m_op)]
+    fn matches_op(c: &Comparator, v: &Version) -> (r: bool)
+        ensures r == m_op(c, v),
+    {
+        match c.op {
+            Op::Exact => matches_exact(c, v),
+            Op::Greater => matches_greater(c, v),
+            Op::GreaterEq => matches_exact(c, v) || matches_greater(c, v),
+            Op::Less => matches_less(c, v),
+            Op::LessEq => matches_exact(c, v) || matches_less(c, v),
+            Op::Tilde => matches_tilde(c, v),
+            Op::Caret => matches_caret(c, v),
+            Op::Wildcard => matches_exact(c, v),
+        }
+    }
+
+    #[summary("v matches the requirement with comparators cs (the origin's VersionReq::matches)")]
+    spec fn matches_req(cs: &[Comparator], v: &Version) -> bool {
+        ops_upto(cs, v, cs.len()) && (v.pre.len() == 0 || some_pre(cs, v, cs.len()))
+    }
+
+    #[effects(pure)]
+    #[uses(m_tilde, opt_is)]
+    fn matches_tilde(c: &Comparator, v: &Version) -> (r: bool)
+        ensures r == m_tilde(c, v),
+    {
+        if v.major != c.major {
+            return false;
+        }
+        match c.minor {
+            None => {},
+            Some(mi) => { if v.minor != mi { return false; } },
+        }
+        match c.patch {
+            None => {},
+            Some(pa) => { if v.patch != pa { return v.patch > pa; } },
+        }
+        compare_pre(v.pre.as_slice(), c.pre.as_slice()) >= 0
+    }
+
+    #[summary("The text the origin's Display writes for e")]
+    #[effects(alloc)]
+    fn message(e: Error) -> Vec<u8> {
+        let mut v: Vec<u8> = Vec::new();
+        match e {
+            Error::Empty => push_text(&mut v, b"empty string, expected a semver version"),
+            Error::UnexpectedEnd(p) => { push_text(&mut v, b"unexpected end of input while parsing "); push_position(&mut v, p); },
+            Error::UnexpectedChar(p, c) => { push_text(&mut v, b"unexpected character "); push_quoted(&mut v, c); push_text(&mut v, b" while parsing "); push_position(&mut v, p); },
+            Error::UnexpectedCharAfter(p, c) => { push_text(&mut v, b"unexpected character "); push_quoted(&mut v, c); push_text(&mut v, b" after "); push_position(&mut v, p); },
+            Error::ExpectedCommaFound(p, c) => { push_text(&mut v, b"expected comma after "); push_position(&mut v, p); push_text(&mut v, b", found "); push_quoted(&mut v, c); },
+            Error::LeadingZero(p) => { push_text(&mut v, b"invalid leading zero in "); push_position(&mut v, p); },
+            Error::Overflow(p) => { push_text(&mut v, b"value of "); push_position(&mut v, p); push_text(&mut v, b" exceeds u64::MAX"); },
+            Error::EmptySegment(p) => { push_text(&mut v, b"empty identifier segment in "); push_position(&mut v, p); },
+            Error::IllegalCharacter(p) => { push_text(&mut v, b"unexpected character in "); push_position(&mut v, p); },
+            Error::WildcardNotTheOnlyComparator(w) => { push_text(&mut v, b"wildcard req ("); v.push(w); push_text(&mut v, b") must be the only comparator in the version req"); },
+            Error::UnexpectedAfterWildcard => push_text(&mut v, b"unexpected character after wildcard in version req"),
+            Error::ExcessiveComparators => push_text(&mut v, b"excessive number of version comparators"),
+        }
+        v
+    }
+
+    spec fn num_order(x: u64, y: u64) -> i8 {
+        if x < y {
+            -1
+        } else if x > y {
+            1
+        } else {
+            0
+        }
+    }
+
+    #[summary("The decimal number at a (the origin's numeric_identifier)")]
+    #[effects(pure)]
+    #[uses(dec, digit, digits, read_num)]
+    fn numeric(s: &[u8], a: usize, pos: Position) -> (r: Result<Num, Error>)
+        requires a <= s.len(),
+        ensures read_num(s, a, r),
+    {
+        let mut len: usize = 0;
+        let mut value: u64 = 0;
+        while a + len < s.len() && s[a + len] >= b'0' && s[a + len] <= b'9'
+            invariant a + len <= s.len(), digits(s, a, a + len), value == dec(s, a, a + len), len <= 1 || s[a] != 48, len == 0 || value > 0 || len == 1,
+            decreases s.len() - a - len,
+        {
+            let d: u8 = s[a + len];
+            if value == 0 && len > 0 {
+                return Err(Error::LeadingZero(pos));
+            }
+            match value.checked_mul(10) {
+                None => { return Err(Error::Overflow(pos)); },
+                Some(m) => match m.checked_add((d - b'0') as u64) { None => { return Err(Error::Overflow(pos)); }, Some(t) => { value = t; }, },
+            }
+            len = len + 1;
+        }
+        if len > 0 {
+            Ok(Num { value: value, end: a + len })
+        } else if a < s.len() {
+            Err(Error::UnexpectedChar(pos, char_at(s, a)))
+        } else {
+            Err(Error::UnexpectedEnd(pos))
+        }
+    }
+
+    #[summary("v matches the operators of the first n comparators of cs")]
+    spec fn ops_upto(cs: &[Comparator], v: &Version, n: usize) -> bool {
+        n <= cs.len() && (forall|i: usize| i < n ==> #[trigger] m_op(&cs[i], v))
+    }
+
+    spec fn opt_is(o: Option<u64>, x: u64) -> bool {
+        match o {
+            None => true,
+            Some(m) => m == x,
+        }
+    }
+
+    #[summary("Parses build metadata on its own (the origin's BuildMetadata::new)")]
+    #[effects(alloc)]
+    fn parse_build(s: &[u8]) -> Result<Vec<u8>, Error> {
+        let e: usize = identifier(s, 0, Position::Build)?;
+        if e < s.len() {
+            return Err(Error::IllegalCharacter(Position::Build));
+        }
+        Ok(copy(s, 0, e))
+    }
+
+    #[summary("Parses a comparator (the origin's Comparator::parse)")]
+    #[effects(alloc)]
+    fn parse_comparator(s: &[u8]) -> Result<Comparator, Error> {
+        let a: usize = skip_spaces(s, 0);
+        let p: Parsed = comparator_at(s, a)?;
+        if p.rest < s.len() {
+            return Err(Error::UnexpectedCharAfter(p.pos, char_at(s, p.rest)));
+        }
+        Ok(p.comparator)
+    }
+
+    #[summary("Parses a pre-release on its own (the origin's Prerelease::new)")]
+    #[effects(alloc)]
+    fn parse_prerelease(s: &[u8]) -> Result<Vec<u8>, Error> {
+        let e: usize = identifier(s, 0, Position::Pre)?;
+        if e < s.len() {
+            return Err(Error::IllegalCharacter(Position::Pre));
+        }
+        Ok(copy(s, 0, e))
+    }
+
+    #[summary("Parses a version requirement (the origin's VersionReq::parse): comparators separated by commas, at most 32, or a lone wildcard")]
+    #[effects(alloc)]
+    fn parse_req(s: &[u8]) -> Result<VersionReq, Error> {
+        let a: usize = skip_spaces(s, 0);
+        if wildcard_at(s, a) {
+            let rest: usize = skip_spaces(s, a + 1);
+            if rest == s.len() {
+                return Ok(VersionReq { comparators: Vec::new() });
+            } else if s[rest] == b',' {
+                return Err(Error::WildcardNotTheOnlyComparator(s[a]));
+            } else {
+                return Err(Error::UnexpectedAfterWildcard);
+            }
+        }
+        let mut cs: Vec<Comparator> = Vec::new();
+        let mut t: usize = a;
+        loop
+            invariant t <= s.len(), cs.len() < 32,
+            decreases s.len() - t + 1,
+        {
+            let parsed: Result<Parsed, Error> = comparator_at(s, t);
+            match parsed {
+                Ok(p) => { if p.rest == s.len() { cs.push(p.comparator); return Ok(VersionReq { comparators: cs }); } if s[p.rest] != b',' { return Err(Error::ExpectedCommaFound(p.pos, char_at(s, p.rest))); } if cs.len() + 1 == 32 { return Err(Error::ExcessiveComparators); } cs.push(p.comparator); let next: usize = skip_spaces(s, p.rest + 1); if next <= t { return Err(Error::ExcessiveComparators); } t = next; },
+                Err(e) => { if wildcard_at(s, t) { let rest: usize = skip_spaces(s, t + 1); if rest == s.len() || s[rest] == b',' { return Err(Error::WildcardNotTheOnlyComparator(s[t])); } } return Err(e); },
+            }
+        }
+    }
+
+    #[summary("Parses a version (the origin's Version::parse): major.minor.patch, then -pre and +build")]
+    #[effects(alloc)]
+    #[uses(digits, read_num)]
+    fn parse_version(s: &[u8]) -> Result<Version, Error> {
+        if s.len() == 0 {
+            return Err(Error::Empty);
+        }
+        let major: Num = numeric(s, 0, Position::Major)?;
+        let a1: usize = dot(s, major.end, Position::Major)?;
+        let minor: Num = numeric(s, a1, Position::Minor)?;
+        let a2: usize = dot(s, minor.end, Position::Minor)?;
+        let patch: Num = numeric(s, a2, Position::Patch)?;
+        let mut at: usize = patch.end;
+        let mut pos: Position = Position::Patch;
+        let mut pre: Vec<u8> = Vec::new();
+        if at < s.len() && s[at] == b'-' {
+            pos = Position::Pre;
+            let e: usize = identifier(s, at + 1, Position::Pre)?;
+            if e == at + 1 {
+                return Err(Error::EmptySegment(Position::Pre));
+            }
+            pre = copy(s, at + 1, e);
+            at = e;
+        }
+        let mut build: Vec<u8> = Vec::new();
+        if at < s.len() && s[at] == b'+' {
+            pos = Position::Build;
+            let e: usize = identifier(s, at + 1, Position::Build)?;
+            if e == at + 1 {
+                return Err(Error::EmptySegment(Position::Build));
+            }
+            build = copy(s, at + 1, e);
+            at = e;
+        }
+        if at < s.len() {
+            return Err(Error::UnexpectedCharAfter(pos, char_at(s, at)));
+        }
+        Ok(Version { major: major.value, minor: minor.value, patch: patch.value, pre: pre, build: build })
+    }
+
+    #[summary("The order of the identifiers of a from i and of b from j: the first that differ decide, and a shorter list is lower")]
+    spec fn pcmp(a: &[u8], i: usize, b: &[u8], j: usize) -> i8
+        decreases a.len() + 1 - i,
+    {
+        if i > a.len() {
+            if j > b.len() {
+                0
+            } else {
+                -1
+            }
+        } else if j > b.len() {
+            1
+        } else if seg_end(a, i) < i || seg_end(a, i) > a.len() || seg_end(b, j) < j || seg_end(b, j) > b.len() {
+            0
+        } else if idcmp(a, i, seg_end(a, i), b, j, seg_end(b, j)) != 0 {
+            idcmp(a, i, seg_end(a, i), b, j, seg_end(b, j))
+        } else {
+            pcmp(a, seg_end(a, i) + 1, b, seg_end(b, j) + 1)
+        }
+    }
+
+    #[uses(pcmp)]
+    proof fn pcmp_anti(a: &[u8], i: usize, b: &[u8], j: usize)
+        ensures pcmp(a, i, b, j) == -pcmp(b, j, a, i),
+        decreases a.len() + 1 - i,
+    {
+        if i <= a.len() && j <= b.len() && seg_end(a, i) >= i && seg_end(a, i) <= a.len() && seg_end(b, j) >= j && seg_end(b, j) <= b.len() {
+            idcmp_anti(a, i, seg_end(a, i), b, j, seg_end(b, j));
+            if idcmp(a, i, seg_end(a, i), b, j, seg_end(b, j)) == 0 {
+                pcmp_anti(a, seg_end(a, i) + 1, b, seg_end(b, j) + 1);
+            }
+        }
+    }
+
+    #[uses(idcmp, pcmp)]
+    proof fn pcmp_refl(a: &[u8], i: usize)
+        ensures pcmp(a, i, a, i) == 0,
+        decreases a.len() + 1 - i,
+    {
+        if i <= a.len() && seg_end(a, i) >= i && seg_end(a, i) <= a.len() {
+            lex_refl(a, i, seg_end(a, i));
+            pcmp_refl(a, seg_end(a, i) + 1);
+        }
+    }
+
+    #[effects(pure)]
+    #[uses(pre_ok)]
+    fn pre_is_compatible(c: &Comparator, v: &Version) -> (r: bool)
+        ensures r == pre_ok(c, v),
+    {
+        if c.major != v.major || c.pre.len() == 0 {
+            return false;
+        }
+        let m: bool = match c.minor {
+            None => false,
+            Some(mi) => mi == v.minor,
+        };
+        let p: bool = match c.patch {
+            None => false,
+            Some(pa) => pa == v.patch,
+        };
+        m && p
+    }
+
+    #[summary("A pre-release of v may match c only when c names the same major.minor.patch with a pre-release")]
+    spec fn pre_ok(c: &Comparator, v: &Version) -> bool {
+        c.major == v.major && c.minor == Some(v.minor) && c.patch == Some(v.patch) && c.pre.len() > 0
+    }
+
+    #[summary("The order of two pre-releases (SemVer 2.0.0 §11.3, §11.4): no pre-release is higher than any")]
+    spec fn pre_order(a: &[u8], b: &[u8]) -> i8 {
+        if a.len() == 0 && b.len() == 0 {
+            0
+        } else if a.len() == 0 {
+            1
+        } else if b.len() == 0 {
+            -1
+        } else {
+            pcmp(a, 0, b, 0)
+        }
+    }
+
+    #[summary("The order of pre-releases is antisymmetric: comparing b with a gives the opposite of comparing a with b")]
+    #[uses(pre_order)]
+    proof fn pre_order_anti(a: &[u8], b: &[u8])
+        ensures pre_order(a, b) == -pre_order(b, a),
+    {
+        pcmp_anti(a, 0, b, 0);
+    }
+
+    #[summary("The order of pre-releases is reflexive")]
+    #[uses(pre_order)]
+    proof fn pre_order_refl(a: &[u8])
+        ensures pre_order(a, a) == 0,
+    {
+        pcmp_refl(a, 0);
+    }
+
+    #[summary("SemVer precedence (§11): major, minor, patch, then the pre-release; build metadata does not count")]
+    spec fn precedence(a: &Version, b: &Version) -> i8 {
+        if a.major != b.major {
+            num_order(a.major, b.major)
+        } else if a.minor != b.minor {
+            num_order(a.minor, b.minor)
+        } else if a.patch != b.patch {
+            num_order(a.patch, b.patch)
+        } else {
+            pre_order(a.pre.as_slice(), b.pre.as_slice())
+        }
+    }
+
+    #[summary("Precedence is antisymmetric")]
+    #[uses(num_order, precedence)]
+    proof fn precedence_anti(a: &Version, b: &Version)
+        ensures precedence(a, b) == -precedence(b, a),
+    {
+        pre_order_anti(a.pre.as_slice(), b.pre.as_slice());
+    }
+
+    #[summary("Precedence is reflexive")]
+    #[uses(precedence)]
+    proof fn precedence_refl(a: &Version)
+        ensures precedence(a, a) == 0,
+    {
+        pre_order_refl(a.pre.as_slice());
+    }
+
+    #[summary("The text of a comparator (the origin's Display)")]
+    #[effects(alloc)]
+    fn print_comparator(v: &mut Vec<u8>, c: &Comparator) -> () {
+        let wild: bool = match c.op {
+            Op::Exact => { v.push(b'='); false },
+            Op::Greater => { v.push(b'>'); false },
+            Op::GreaterEq => { v.push(b'>'); v.push(b'='); false },
+            Op::Less => { v.push(b'<'); false },
+            Op::LessEq => { v.push(b'<'); v.push(b'='); false },
+            Op::Tilde => { v.push(b'~'); false },
+            Op::Caret => { v.push(b'^'); false },
+            Op::Wildcard => true,
+        };
+        std::bytes::push_u64(v, c.major);
+        match c.minor {
+            None => { if wild { v.push(b'.'); v.push(b'*'); } },
+            Some(mi) => { v.push(b'.'); std::bytes::push_u64(v, mi); match c.patch { None => { if wild { v.push(b'.'); v.push(b'*'); } }, Some(pa) => { v.push(b'.'); std::bytes::push_u64(v, pa); if c.pre.len() > 0 { v.push(b'-'); append(v, c.pre.as_slice()); } }, } },
+        }
+    }
+
+    #[summary("The text of a requirement (the origin's Display): * when it has no comparator, else the comparators separated by a comma and a space")]
+    #[effects(alloc)]
+    fn print_req(r: &VersionReq) -> Vec<u8> {
+        let mut v: Vec<u8> = Vec::new();
+        if r.comparators.len() == 0 {
+            v.push(b'*');
+            return v;
+        }
+        for i in 0..r.comparators.len() {
+            if i > 0 {
+                v.push(b',');
+                v.push(b' ');
+            }
+            print_comparator(&mut v, &r.comparators[i]);
+        }
+        v
+    }
+
+    #[summary("The text of v (the origin's Display): major.minor.patch, -pre and +build when they are not empty")]
+    #[effects(alloc)]
+    fn print_version(v: &Version) -> Vec<u8> {
+        let mut t: Vec<u8> = Vec::new();
+        std::bytes::push_u64(&mut t, v.major);
+        t.push(b'.');
+        std::bytes::push_u64(&mut t, v.minor);
+        t.push(b'.');
+        std::bytes::push_u64(&mut t, v.patch);
+        if v.pre.len() > 0 {
+            t.push(b'-');
+            append(&mut t, v.pre.as_slice());
+        }
+        if v.build.len() > 0 {
+            t.push(b'+');
+            append(&mut t, v.build.as_slice());
+        }
+        t
+    }
+
+    #[summary("The words the origin uses for a position")]
+    #[effects(alloc)]
+    fn push_position(v: &mut Vec<u8>, p: Position) -> () {
+        match p {
+            Position::Major => push_text(v, b"major version number"),
+            Position::Minor => push_text(v, b"minor version number"),
+            Position::Patch => push_text(v, b"patch version number"),
+            Position::Pre => push_text(v, b"pre-release identifier"),
+            Position::Build => push_text(v, b"build metadata"),
+        }
+    }
+
+    #[summary("Appends c quoted as the origin's QuotedChar writes it: '\\0' for NUL, else Rust's Debug of the char. Escapes of characters above U+007F that Rust's Debug escapes are not ported: they are written as they are")]
+    #[effects(alloc)]
+    fn push_quoted(v: &mut Vec<u8>, c: u32) -> () {
+        v.push(b'\'');
+        if c == 0 {
+            push_text(v, b"\\0");
+        } else if c == 9 {
+            push_text(v, b"\\t");
+        } else if c == 10 {
+            push_text(v, b"\\n");
+        } else if c == 13 {
+            push_text(v, b"\\r");
+        } else if c == 39 {
+            push_text(v, b"\\'");
+        } else if c == 92 {
+            push_text(v, b"\\\\");
+        } else if c < 32 || c == 127 {
+            push_text(v, b"\\u{");
+            let digits: [u8; 16] = [48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 97, 98, 99, 100, 101, 102];
+            if c >= 16 {
+                v.push(digits[(c / 16) as usize]);
+            }
+            v.push(digits[(c % 16) as usize]);
+            v.push(b'}');
+        } else if c < 1114112 {
+            push_utf8(v, c);
+        }
+        v.push(b'\'');
+    }
+
+    #[effects(alloc)]
+    fn push_text(v: &mut Vec<u8>, t: &[u8]) -> () {
+        append(v, t);
+    }
+
+    #[summary("Appends the UTF-8 encoding of the scalar value c")]
+    #[effects(alloc)]
+    fn push_utf8(v: &mut Vec<u8>, c: u32) -> ()
+        requires c < 1114112,
+    {
+        if c < 128 {
+            v.push(c as u8);
+        } else if c < 2048 {
+            v.push((192 + c / 64) as u8);
+            v.push((128 + c % 64) as u8);
+        } else if c < 65536 {
+            v.push((224 + c / 4096) as u8);
+            v.push((128 + c / 64 % 64) as u8);
+            v.push((128 + c % 64) as u8);
+        } else {
+            v.push((240 + c / 262144) as u8);
+            v.push((128 + c / 4096 % 64) as u8);
+            v.push((128 + c / 64 % 64) as u8);
+            v.push((128 + c % 64) as u8);
+        }
+    }
+
+    #[summary("r is the result of reading a number at a: on success the longest run of digits, with no leading zero, and its value")]
+    spec fn read_num(s: &[u8], a: usize, r: Result<Num, Error>) -> bool {
+        match r {
+            Ok(n) => a < n.end && digits(s, a, n.end) && (n.end == s.len() || !digit(s[n.end])) && (n.end == a + 1 || s[a] != 48) && n.value == dec(s, a, n.end),
+            Err(e) => true,
+        }
+    }
+
+    #[summary("Whether v matches the requirement r (the origin's VersionReq::matches): every comparator, and a pre-release only when some comparator allows it")]
+    #[effects(pure)]
+    #[uses(matches_req, ops_upto, some_pre)]
+    fn req_matches(r: &VersionReq, v: &Version) -> (m: bool)
+        ensures m == matches_req(r.comparators.as_slice(), v),
+    {
+        let n: usize = r.comparators.len();
+        for i in 0..n
+            invariant n == r.comparators.len(), ops_upto(r.comparators.as_slice(), v, i),
+        {
+            if !matches_op(&r.comparators[i], v) {
+                return false;
+            }
+        }
+        if v.pre.len() == 0 {
+            return true;
+        }
+        for i in 0..n
+            invariant n == r.comparators.len(), ops_upto(r.comparators.as_slice(), v, n), !some_pre(r.comparators.as_slice(), v, i),
+        {
+            if pre_is_compatible(&r.comparators[i], v) {
+                return true;
+            }
+        }
+        false
+    }
+
+    spec fn same(a: &[u8], b: &[u8]) -> bool {
+        a.len() == b.len() && (forall|k: usize| k < a.len() ==> #[trigger] a[k] == b[k])
+    }
+
+    #[summary("The end of the dot-separated identifier of s that starts at i: the next dot, or the end")]
+    spec fn seg_end(s: &[u8], i: usize) -> usize
+        decreases s.len() - i,
+    {
+        if i >= s.len() || s[i] == 46 {
+            i
+        } else {
+            seg_end(s, i + 1)
+        }
+    }
+
+    #[summary("The end of the identifier at i")]
+    #[effects(pure)]
+    #[uses(seg_end)]
+    fn segment_end(s: &[u8], i: usize) -> (r: usize)
+        requires i <= s.len(),
+        ensures r == seg_end(s, i), i <= r, r <= s.len(),
+    {
+        let mut k: usize = i;
+        while k < s.len() && s[k] != b'.'
+            invariant i <= k, k <= s.len(), seg_end(s, i) == seg_end(s, k),
+            decreases s.len() - k,
+        {
+            k = k + 1;
+        }
+        k
+    }
+
+    #[summary("The first position from i on in s[..e] that is not the digit 0")]
+    spec fn skip0(s: &[u8], i: usize, e: usize) -> usize
+        decreases e - i,
+    {
+        if i >= e || e > s.len() || s[i] != 48 {
+            i
+        } else {
+            skip0(s, i + 1, e)
+        }
+    }
+
+    #[summary("The position after the spaces at a")]
+    #[effects(pure)]
+    fn skip_spaces(s: &[u8], a: usize) -> (r: usize)
+        requires a <= s.len(),
+        ensures a <= r, r <= s.len(),
+    {
+        let mut k: usize = a;
+        while k < s.len() && s[k] == b' '
+            invariant a <= k, k <= s.len(),
+            decreases s.len() - k,
+        {
+            k = k + 1;
+        }
+        k
+    }
+
+    #[effects(pure)]
+    #[uses(skip0)]
+    fn skip_zeros(s: &[u8], i: usize, e: usize) -> (r: usize)
+        requires i <= e, e <= s.len(),
+        ensures r == skip0(s, i, e), i <= r, r <= e,
+    {
+        let mut k: usize = i;
+        while k < e && s[k] == b'0'
+            invariant i <= k, k <= e, skip0(s, i, e) == skip0(s, k, e),
+            decreases e - k,
+        {
+            k = k + 1;
+        }
+        k
+    }
+
+    #[summary("one of the first n comparators of cs allows a pre-release of v")]
+    spec fn some_pre(cs: &[Comparator], v: &Version, n: usize) -> bool {
+        exists|i: usize| i < n && i < cs.len() && #[trigger] pre_ok(&cs[i], v)
+    }
+
+    #[summary("The origin's total order of versions (its derived Ord): precedence, then build metadata")]
+    spec fn version_order(a: &Version, b: &Version) -> i8 {
+        if precedence(a, b) != 0 {
+            precedence(a, b)
+        } else {
+            build_order(a.build.as_slice(), b.build.as_slice())
+        }
+    }
+
+    #[summary("Whether a wildcard character (*, x or X) is at a")]
+    #[effects(pure)]
+    fn wildcard_at(s: &[u8], a: usize) -> (r: bool)
+        requires a <= s.len(),
+        ensures r ==> a < s.len(),
+    {
+        a < s.len() && (s[a] == b'*' || s[a] == b'x' || s[a] == b'X')
+    }
+}

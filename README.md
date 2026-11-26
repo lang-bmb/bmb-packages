@@ -13,6 +13,8 @@ BMB is a language with a Rust-shaped surface whose functions carry contracts tha
 | [`hex`](packages/hex) | the Rust crate `hex` 0.4.3 | bytes as hexadecimal text and back (RFC 4648 base16), with a proved round trip |
 | [`siphash`](packages/siphash) | the Rust crate `siphasher` 1.0.4 | SipHash-2-4 and SipHash-1-3, 64- and 128-bit output, one-shot and incremental, with writing in pieces proved equal to writing the whole |
 | [`hmac`](packages/hmac) | the Rust crate `hmac` 0.13.0 | HMAC-SHA256 on top of `std::sha256`, proved to be HMAC in terms of the SHA-256 specification |
+| [`semver`](packages/semver) | the Rust crate `semver` 1.0.28 | semantic versions and Cargo's version requirements: parsing, printing, the SemVer precedence order (proved antisymmetric and reflexive) and matching, stated exactly |
+| [`percent_encoding`](packages/percent_encoding) | the Rust crate `percent-encoding` 2.3.2 | percent-encoding under a set of ASCII bytes and lenient decoding, specified byte by byte, with a proved round trip |
 
 ## Layout of a package
 
