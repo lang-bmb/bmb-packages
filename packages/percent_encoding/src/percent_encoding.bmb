@@ -70,15 +70,6 @@ mod percent_encoding {
         n <= v.len() && (forall|k: usize| k < n ==> pos(t, k) < t.len() && #[trigger] v[k] == out_at(t, pos(t, k)))
     }
 
-    #[summary("The upper-case digit of the 4-bit value x")]
-    spec fn digit(x: u8) -> u8 {
-        if x < 10 {
-            x + 48
-        } else {
-            x + 55
-        }
-    }
-
     #[summary("The length of the encoding of the first n bytes of x")]
     spec fn elen(s: AsciiSet, x: &[u8], n: usize) -> usize
         decreases n,
@@ -136,28 +127,6 @@ mod percent_encoding {
         b < 128 && s.bits[b]
     }
 
-    #[summary("The upper-case digit of x as a character; it reads back as x")]
-    #[effects(pure)]
-    #[uses(digit, val_of)]
-    fn hex_char(x: u8) -> (r: char)
-        requires x < 16,
-        ensures u32::from(r) == digit(x), val_of(digit(x)) == x, digit(x) < 128,
-    {
-        let code: u32 = if x < 10 {
-            x as u32 + 48
-        } else {
-            x as u32 + 55
-        };
-        match char::from_u32(code) {
-            None => { assert(false); '0' },
-            Some(c) => c,
-        }
-    }
-
-    spec fn is_hex(c: u8) -> bool {
-        val_of(c) < 16
-    }
-
     spec fn kept(t: &[u8], u: &[u8]) -> bool {
         u.len() <= t.len() && (forall|k: usize| k < u.len() ==> #[trigger] t[k] == u[k])
     }
@@ -174,7 +143,7 @@ mod percent_encoding {
     #[summary("The byte the decoder writes for position i of t")]
     spec fn out_at(t: &[u8], i: usize) -> u8 {
         if triple(t, i) {
-            val_of(t[i + 1]) * 16 + val_of(t[i + 2])
+            hex::val_of(t[i + 1]) * 16 + hex::val_of(t[i + 2])
         } else {
             t[i]
         }
@@ -182,7 +151,7 @@ mod percent_encoding {
 
     #[summary("The percent-decoding of input, lenient as the origin's: a % that is not followed by two hex digits is kept")]
     #[effects(alloc)]
-    #[uses(is_hex, out_at, pos, step, triple)]
+    #[uses(hex::is_hex, out_at, pos, step, triple)]
     fn percent_decode(input: &[u8]) -> (r: Vec<u8>)
         ensures decoded(input, r.as_slice()), r.len() <= input.len(),
     {
@@ -195,8 +164,8 @@ mod percent_encoding {
         {
             let b: u8 = input[i];
             if b == b'%' && i + 2 < n {
-                let h: u8 = value(input[i + 1]);
-                let l: u8 = value(input[i + 2]);
+                let h: u8 = hex::value(input[i + 1]);
+                let l: u8 = hex::value(input[i + 2]);
                 if h < 16 && l < 16 {
                     v.push(h * 16 + l);
                     i = i + 3;
@@ -238,7 +207,7 @@ mod percent_encoding {
 
     #[summary("The encoding of byte b at offset o of t: %XY with upper-case digits when b is encoded, b itself otherwise")]
     spec fn piece_of(s: AsciiSet, b: u8, t: &[u8], o: usize) -> bool {
-        o < t.len() && t[o] == (if encodes(s, b) { 37 } else { b }) && (encodes(s, b) ==> o + 2 < t.len() && t[o + 1] == digit(b / 16) && t[o + 2] == digit(b % 16))
+        o < t.len() && t[o] == (if encodes(s, b) { 37 } else { b }) && (encodes(s, b) ==> o + 2 < t.len() && t[o + 1] == hex::digit(b / 16, true) && t[o + 2] == hex::digit(b % 16, true))
     }
 
     #[summary("The pieces of the first n bytes of x are in t at the offsets st")]
@@ -266,15 +235,15 @@ mod percent_encoding {
 
     #[summary("Appends the encoding of b")]
     #[effects(alloc)]
-    #[uses(ascii, digit, encodes, kept, piece_of, width)]
+    #[uses(ascii, encodes, kept, piece_of, width)]
     fn push_encoded(t: &mut String, s: AsciiSet, b: u8) -> ()
         requires t.len() <= 3000000000000000000, ascii(t.as_bytes()),
         ensures t.len() == old(t).len() + width(s, b), kept(t.as_bytes(), old(t).as_bytes()), piece_of(s, b, t.as_bytes(), old(t).len()), ascii(t.as_bytes()),
     {
         if should_percent_encode(s, b) {
             t.push('%');
-            t.push(hex_char(b / 16));
-            t.push(hex_char(b % 16));
+            t.push(hex::hex_char(b / 16, true));
+            t.push(hex::hex_char(b % 16, true));
         } else {
             match char::from_u32(b as u32) {
                 None => { assert(false); },
@@ -341,7 +310,7 @@ mod percent_encoding {
     }
 
     #[summary("and the byte the decoder writes there is byte k of x")]
-    #[uses(digit, encoded_upto, encodes, is_hex, out_at, piece_of, triple, val_of)]
+    #[uses(encoded_upto, encodes, hex::digit, hex::is_hex, hex::val_of, out_at, piece_of, triple)]
     proof fn rt_byte(s: AsciiSet, x: &[u8], t: &[u8], k: usize, o: usize)
         requires encoded(s, x, t), s.bits[37], k < x.len(), o == elen(s, x, k),
         ensures out_at(t, o) == x[k], o < t.len(),
@@ -364,7 +333,7 @@ mod percent_encoding {
     }
 
     #[summary("Where % is in s, the decoder steps over piece k of the encoding of x, at offset o, in one step")]
-    #[uses(digit, encoded_upto, encodes, is_hex, piece_of, step, triple, val_of, width)]
+    #[uses(encoded_upto, encodes, hex::digit, hex::is_hex, hex::val_of, piece_of, step, triple, width)]
     proof fn rt_step(s: AsciiSet, x: &[u8], t: &[u8], k: usize, o: usize)
         requires encoded(s, x, t), s.bits[37], k < x.len(), o == elen(s, x, k),
         ensures step(t, o) == width(s, x[k]),
@@ -396,7 +365,7 @@ mod percent_encoding {
 
     #[summary("At position i of t, % and two hex digits")]
     spec fn triple(t: &[u8], i: usize) -> bool {
-        i + 2 < t.len() && t[i] == 37 && is_hex(t[i + 1]) && is_hex(t[i + 2])
+        i + 2 < t.len() && t[i] == 37 && hex::is_hex(t[i + 1]) && hex::is_hex(t[i + 2])
     }
 
     #[summary("The union of a and b")]
@@ -417,36 +386,6 @@ mod percent_encoding {
 
     spec fn united(a: AsciiSet, b: AsciiSet, r: AsciiSet) -> bool {
         forall|c: usize| c < 128 ==> #[trigger] r.bits[c] == (a.bits[c] || b.bits[c])
-    }
-
-    #[summary("The value of the hex digit c (either case), 16 for a byte that is not one")]
-    spec fn val_of(c: u8) -> u8 {
-        if 65 <= c && c <= 70 {
-            c - 55
-        } else if 97 <= c && c <= 102 {
-            c - 87
-        } else if 48 <= c && c <= 57 {
-            c - 48
-        } else {
-            16
-        }
-    }
-
-    #[summary("The value of the hex digit c, 16 for a byte that is not one (char::to_digit(16) of the origin)")]
-    #[effects(pure)]
-    #[uses(val_of)]
-    fn value(c: u8) -> (r: u8)
-        ensures r == val_of(c),
-    {
-        if c >= b'A' && c <= b'F' {
-            c - b'A' + 10
-        } else if c >= b'a' && c <= b'f' {
-            c - b'a' + 10
-        } else if c >= b'0' && c <= b'9' {
-            c - b'0'
-        } else {
-            16
-        }
     }
 
     #[summary("How many bytes the encoding of b takes")]

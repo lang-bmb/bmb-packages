@@ -2,8 +2,10 @@
 # Checks every package under packages/ (or the packages named as arguments)
 # with gotgan, the package manager:
 #   gotgan check   normal form and checks of the units and the test units;
-#   gotgan verify  a full proof, with no escape hatch, no trusted definition,
-#                  no unproved termination, and deps.std as the program reaches;
+#   gotgan verify  a full proof of the package and the packages it depends on,
+#                  with no escape hatch, no trusted definition, no unproved
+#                  termination, and deps.std and deps.packages exactly what
+#                  the package's units use;
 #   gotgan test    the test suites of package.json, run through their drivers.
 # gotgan is $GOTGAN (default: `gotgan` on PATH) and the compiler $BMB (default:
 # `bmb` on PATH; gotgan reads it too). Exits non-zero if any command fails for
@@ -55,8 +57,14 @@ for line in sys.stdin:
         print(f"{name}: check: {row['units']} unit(s), {row['test_units']} test unit(s), "
               f"fmt {json.dumps(row['fmt'])}, check {json.dumps(row['check'])}")
     elif command == "verify":
-        std = f"and {row['std_defs']} of std::{', std::'.join(row['std'])}" if row['std'] else "no std unit"
-        print(f"{name}: verify: {row['defs']} definitions proved ({std}), "
+        if row['std']:
+            std = f"{row['std_defs']} of std::{', std::'.join(row['std'])}"
+        elif row['std_defs']:
+            std = f"{row['std_defs']} of std through the packages"
+        else:
+            std = "no std unit"
+        pkgs = f"{row['dep_defs']} of {', '.join(row['packages'])}" if row['packages'] else "no package"
+        print(f"{name}: verify: {row['defs']} definitions proved (and {pkgs}; {std}), "
               f"{row['obligations']} obligations, rlimit {row['rlimit']} "
               f"(largest query {row['rlimit_max']}); unproved {row['unproved']}, escapes {row['escapes']}, "
               f"trusted {row['trusted']}, termination unproved {row['termination_unproved']}")

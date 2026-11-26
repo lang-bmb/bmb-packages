@@ -5,7 +5,10 @@
   "licence": "MIT",
   "units": ["percent_encoding"],
   "deps": {
-    "std": []
+    "std": [],
+    "packages": {
+      "hex": { "path": "../hex" }
+    }
   },
   "origin": {
     "crate": "percent-encoding",

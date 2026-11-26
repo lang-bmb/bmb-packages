@@ -4,7 +4,7 @@ The official packages of the BMB language.
 
 BMB is a language with a Rust-shaped surface whose functions carry contracts that an SMT solver proves before any code is built. The packages here are ports of widely used Rust crates. Each one keeps the origin's tests and published test vectors as data, and its public functions carry functional contracts where an exact one is short.
 
-**Status.** For now these packages are working material for the language's own development and measurement: they are written to find where the language, the compiler and the tools fall short, and to measure the cost of proof on real code. They are not yet declared usable by others, and their interfaces will change. There is not yet a way for a package to call another package; a package may call the standard library (`std::NAME::f`).
+**Status.** For now these packages are working material for the language's own development and measurement: they are written to find where the language, the compiler and the tools fall short, and to measure the cost of proof on real code. They are not yet declared usable by others, and their interfaces will change. A package may call the standard library (`std::NAME::f`) and other packages of this repository (`hex::encode(..)`). It declares the packages it calls by the paths of their directories, in `deps.packages` of `package.json` (`"packages": { "hex": { "path": "../hex" } }`); there are no versions and no registry. gotgan proves and builds a package together with the packages it depends on. A library's units are named after the package, `NAME` or `NAME_...`, because the units of all the packages share one namespace. See [gotgan's README](https://github.com/lang-bmb/gotgan#dependencies). `percent_encoding` uses `hex`'s digit functions this way.
 
 ## Packages
 
@@ -20,7 +20,8 @@ BMB is a language with a Rust-shaped surface whose functions carry contracts tha
 
 ```
 packages/<name>/
-  package.json    name, version, summary, units, the std units it uses, origin (crate, version, repository, licence),
+  package.json    name, version, summary, units, deps (the std units and the packages, by path, its units use),
+                  origin (crate, version, repository, licence),
                   and the test suites (tests: the test units and the case files)
   src/<unit>.bmb  one file per unit, in normal form (bmb fmt)
   tests/          the test program (tests/driver.bmb) and the origin's tests and vectors as data, in gotgan's
@@ -31,7 +32,7 @@ packages/<name>/
 
 The packages are checked, proved and tested with [gotgan](https://github.com/lang-bmb/gotgan), the BMB package manager, which reads `package.json`. Each package is accepted when:
 
-1. `gotgan verify` passes: `bmb verify` proves every definition, with no escape hatch (no `assume`, no `#[external_body]`), no trusted definition and no unproved termination, and the standard library units the program reaches are exactly `deps.std`;
+1. `gotgan verify` passes: `bmb verify` proves every definition of the package and of the packages it depends on, with no escape hatch (no `assume`, no `#[external_body]`), no trusted definition and no unproved termination, and `deps.std` and `deps.packages` are exactly the standard library units and the packages its units use;
 2. `gotgan check` passes: its sources and its test units are in normal form (`bmb fmt --check`) and check;
 3. `gotgan test` passes: for each test suite of `package.json`, it builds the driver with `bmb build` (which proves it first) and runs every case of the case files through it; a case passes when the driver exits with 0 and writes exactly the expected bytes.
 
@@ -50,7 +51,7 @@ gotgan --package packages/hex verify
 gotgan --package packages/hex test
 ```
 
-Results are JSON rows on standard output; gotgan writes the test drivers to `packages/<name>/target/gotgan/`.
+Results are JSON rows on standard output; gotgan writes the test drivers to `packages/<name>/target/gotgan/`. gotgan passes no proof cache to the compiler, so every `verify` and `test` proves the package and its dependencies again.
 
 ## Tools
 

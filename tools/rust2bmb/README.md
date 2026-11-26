@@ -87,7 +87,7 @@ Grouped by idiom: iterators and closures 18 (iterator methods, `for` over an ite
 
 The rewrites applied (77): 16 `#[effects(TODO)]`, 11 doc comments to `#[summary]`, 3 doc comments on variants dropped, 10 attributes dropped, 8 visibility, 7 `AsRef<[u8]>` parameters, 5 `as_ref` uses (2 `let`, 3 calls), 4 receivers, 4 `use crate::..` to full paths, 2 built-in `use`s, 2 byte-string constants, 1 named-field enum, 1 construction of a named-field variant, 1 integer `match` to an `if` chain, 1 field init shorthand, 1 inner attributes.
 
-How much of the final `packages/hex/src/hex.bmb` came from the tool: it was written by hand from the origin, not by editing the tool's output, and the overlap was measured afterwards by matching trimmed lines. Of its 339 non-blank lines, 43 are identical to a line of the tool's output; 33 of those are braces, `} else {` or `Ok(())`, and 10 are substantive (the `mod` line, three length checks, and the six lines of `val`'s `if` chain, which the tool made from the origin's `match`). The other 296 were written by hand: 106 lines of `spec fn`, 20 contract clauses, 8 lines of proof, 40 `#[summary]`, 13 `#[effects]`, 7 `#[uses]`, and the code that replaces iterators and tuples. Line matching undercounts a little: the tool's printer and BMB's normal form lay out some expressions differently.
+How much of the final `packages/hex/src/hex.bmb` came from the tool: it was written by hand from the origin, not by editing the tool's output, and the overlap was measured afterwards by matching trimmed lines. Of its 353 non-blank lines, 43 are identical to a line of the tool's output; 36 of those are braces, `} else {` or `Ok(())`, and 7 are substantive (the `mod` line, three length checks, and the three `if` lines of the chain in `value`, which the tool made from the origin's `match` in `val`). The other 310 were written by hand: 106 lines of `spec fn`, 21 contract clauses, 8 lines of proof, 41 `#[summary]`, 14 `#[effects]`, 9 `#[uses]`, and the code that replaces iterators and tuples. Line matching undercounts a little: the tool's printer and BMB's normal form lay out some expressions differently.
 
 Re-measured with the current tool (after the additions above): 69 reports (64 + 5) and 79 rewrites. `let` types were written for 2 `let`s (`let high = table[..]` and `let low`); the remaining `let (high, low)` is a tuple. The 5 `path from another crate` reports are `iter::FromIterator`, written five times. The raw output still does not check: the same 30 diagnostics.
 
@@ -199,7 +199,7 @@ Reported constructs, counted: path from another crate 26, use 10, let without a 
 
 Rewrites: 18 visibility, 18 `#[effects(TODO)]`, 16 doc comments, 11 receivers, 10 attributes dropped, 6 `let` types, 5 field init shorthands, 2 built-in `use`s, 1 inner attributes.
 
-Of the 412 non-blank lines of `packages/percent_encoding/src/percent_encoding.bmb` (written by hand), 42 are identical to a line of the tool's output, and only the `mod` line is not a brace: the port's set is an array of `bool`s and its encoder a loop, where the origin has bit masks and iterators.
+Of the 356 non-blank lines of `packages/percent_encoding/src/percent_encoding.bmb` (written by hand), 32 are identical to a line of the tool's output, and only the `mod` line is not a brace: the port's set is an array of `bool`s and its encoder a loop, where the origin has bit masks and iterators.
 
 ### Fixed while measuring semver and percent-encoding
 
@@ -216,11 +216,11 @@ The earlier three packages' numbers are unchanged by these (re-measured).
 
 | package | origin code lines | items written / dropped | reports | rewrites | raw output checks | final lines matching the tool's output (substantive) |
 | --- | --- | --- | --- | --- | --- | --- |
-| hex | 351 | 18 / 19 | 69 | 79 | no (30) | 43 of 339 (10) |
+| hex | 351 | 18 / 19 | 69 | 79 | no (30) | 43 of 353 (7) |
 | siphash | 987 | 44 / 30 | 148 | 564 | no (347) | 61 of 442 (0) |
 | hmac | 359 | 42 / 28 | 285 | 89 | no (98) | 30 of 161 (1) |
 | semver | 1,222 | 59 / 59 | 420 | 185 | no (387) | 236 of 1,299 (28) |
-| percent_encoding | 451 | 18 / 17 | 89 | 87 | no (102) | 42 of 412 (1) |
+| percent_encoding | 451 | 18 / 17 | 89 | 87 | no (102) | 32 of 356 (1) |
 
 ## Checks
 
