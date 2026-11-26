@@ -196,11 +196,12 @@ mod hex {
         s.len() <= 4611686018427387903
     }
 
-    #[summary("The digit of the 4-bit value x as a character")]
+    #[summary("The digit of the 4-bit value x as a character; it is ASCII and reads back as x")]
     #[effects(pure)]
+    #[uses(digit)]
     fn hex_char(x: u8, upper: bool) -> (r: char)
         requires x < 16,
-        ensures u32::from(r) == digit(x, upper), val_of(digit(x, upper)) == x,
+        ensures u32::from(r) == digit(x, upper), val_of(digit(x, upper)) == x, digit(x, upper) < 128,
     {
         match char::from_u32(hex_digit(x, upper) as u32) {
             None => { assert(false); '0' },
@@ -342,12 +343,9 @@ mod hex {
     fn val(c: u8, idx: usize) -> (r: Result<u8, FromHexError>)
         ensures val_result(c, idx, r),
     {
-        if c >= b'A' && c <= b'F' {
-            Ok(c - b'A' + 10)
-        } else if c >= b'a' && c <= b'f' {
-            Ok(c - b'a' + 10)
-        } else if c >= b'0' && c <= b'9' {
-            Ok(c - b'0')
+        let v: u8 = value(c);
+        if v < 16 {
+            Ok(v)
         } else {
             Err(FromHexError::InvalidHexCharacter(c, idx))
         }
@@ -371,6 +369,23 @@ mod hex {
         match r {
             Ok(x) => is_hex(c) && x == val_of(c),
             Err(e) => !is_hex(c) && (match e { FromHexError::InvalidHexCharacter(d, i) => d == c && i == idx, FromHexError::OddLength => false, FromHexError::InvalidStringLength => false, }),
+        }
+    }
+
+    #[summary("The value of the digit c (either case), 16 for a byte that is not a digit (the origin's char::to_digit(16))")]
+    #[effects(pure)]
+    #[uses(val_of)]
+    fn value(c: u8) -> (r: u8)
+        ensures r == val_of(c),
+    {
+        if c >= b'A' && c <= b'F' {
+            c - b'A' + 10
+        } else if c >= b'a' && c <= b'f' {
+            c - b'a' + 10
+        } else if c >= b'0' && c <= b'9' {
+            c - b'0'
+        } else {
+            16
         }
     }
 }
