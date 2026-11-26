@@ -29,6 +29,11 @@ mod siphash {
         s.v0 = s.v0 ^ m;
     }
 
+    #[summary("x with the word w absorbed and 8 more bytes counted")]
+    spec fn ate(x: Hasher, w: u64) -> Hasher {
+        Hasher { k0: x.k0, k1: x.k1, rounds: x.rounds, wide: x.wide, length: x.length.wrapping_add(8), state: absorb(x.state, w, x.rounds), tail: 0, ntail: 0 }
+    }
+
     spec fn c_rounds(s: State, r: Rounds) -> State {
         match r {
             Rounds::Sip13 => sipround(s),
@@ -68,6 +73,34 @@ mod siphash {
             Rounds::Sip13 => sipround(sipround(sipround(s))),
             Rounds::Sip24 => sipround(sipround(sipround(sipround(s)))),
         }
+    }
+
+    #[summary("Eight bytes written to a hasher with an empty tail absorb their little-endian word")]
+    #[uses(ate, place, pw, word)]
+    proof fn eight(h: Hasher, m: &[u8], i: usize, x: Hasher)
+        requires i + 8 <= m.len(), x == pushes(h, m, i), x.ntail == 0, ok(x),
+        ensures pushes(h, m, i + 8) == ate(x, word(m, i)),
+    {
+        step(h, m, i, x);
+        step(h, m, i + 1, pushes(h, m, i + 1));
+        step(h, m, i + 2, pushes(h, m, i + 2));
+        step(h, m, i + 3, pushes(h, m, i + 3));
+        step(h, m, i + 4, pushes(h, m, i + 4));
+        step(h, m, i + 5, pushes(h, m, i + 5));
+        step(h, m, i + 6, pushes(h, m, i + 6));
+        assert(pushes(h, m, i + 7).state == x.state && pushes(h, m, i + 7).rounds == x.rounds);
+        assert(pushes(h, m, i + 7).tail + place(m[i + 7], 7) == word(m, i));
+        assert(pushes(h, m, i + 7).length.wrapping_add(1) == x.length.wrapping_add(8));
+        fill(h, m, i + 7, pushes(h, m, i + 7));
+    }
+
+    #[summary("The byte that fills the tail absorbs the word of the tail and the byte")]
+    #[uses(place, push)]
+    proof fn fill(h: Hasher, m: &[u8], j: usize, x: Hasher)
+        requires j < m.len(), x == pushes(h, m, j), x.ntail == 7,
+        ensures pushes(h, m, j + 1) == Hasher { k0: x.k0, k1: x.k1, rounds: x.rounds, wide: x.wide, length: x.length.wrapping_add(1), state: absorb(x.state, x.tail + place(m[j], 7), x.rounds), tail: 0, ntail: 0 },
+    {
+        assert(pushes(h, m, j + 1) == push(x, m[j]));
     }
 
     #[summary("Finishes a 64-bit hasher: the SipHash value of the bytes written")]
@@ -134,7 +167,10 @@ mod siphash {
 
     #[summary("The key of h as 16 bytes, little-endian (the origin's key)")]
     #[effects(pure)]
-    fn key(h: &Hasher) -> [u8; 16] {
+    #[uses(key0, key1)]
+    fn key(h: &Hasher) -> (r: [u8; 16])
+        ensures key0(r) == h.k0, key1(r) == h.k1,
+    {
         let a: [u8; 8] = h.k0.to_le_bytes();
         let b: [u8; 8] = h.k1.to_le_bytes();
         [a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]
@@ -154,6 +190,16 @@ mod siphash {
         let hi: u64 = h.length % 256;
         let t: State = absorb(h.state, place(hi, 7) + h.tail, h.rounds);
         d_rounds(State { v0: t.v0, v1: t.v1, v2: t.v2 ^ x, v3: t.v3 }, h.rounds)
+    }
+
+    #[summary("The little-endian word of bytes i to i + 7 of m")]
+    #[effects(pure)]
+    #[uses(word)]
+    fn load_word(m: &[u8], i: usize) -> (r: u64)
+        requires i + 8 <= m.len(),
+        ensures r == word(m, i),
+    {
+        u64::from_le_bytes([m[i], m[i + 1], m[i + 2], m[i + 3], m[i + 4], m[i + 5], m[i + 6], m[i + 7]])
     }
 
     #[summary("A 128-bit hasher for a 16-byte key")]
@@ -347,6 +393,15 @@ mod siphash {
         State { v0: d0, v1: e1, v2: d2.rotate_left(32), v3: e3 }
     }
 
+    #[summary("One byte written to a hasher whose tail is not full goes into the tail")]
+    #[uses(place, push)]
+    proof fn step(h: Hasher, m: &[u8], j: usize, x: Hasher)
+        requires j < m.len(), x == pushes(h, m, j), x.ntail < 7,
+        ensures pushes(h, m, j + 1).ntail == x.ntail + 1, pushes(h, m, j + 1).tail == x.tail + place(m[j], x.ntail), pushes(h, m, j + 1).state == x.state, pushes(h, m, j + 1).length == x.length.wrapping_add(1), pushes(h, m, j + 1).k0 == x.k0, pushes(h, m, j + 1).k1 == x.k1, pushes(h, m, j + 1).rounds == x.rounds, pushes(h, m, j + 1).wide == x.wide,
+    {
+        assert(pushes(h, m, j + 1) == push(x, m[j]));
+    }
+
     #[summary("Streaming equals one-shot: if x is the hasher after writing a, then writing b to x leaves the hasher that writing m, the concatenation of a and b, leaves; so finish gives the one-shot hash of m")]
     proof fn streaming(h: Hasher, x: Hasher, a: &[u8], b: &[u8], m: &[u8])
         requires concat(a, b, m), x == pushes(h, a, a.len()),
@@ -366,16 +421,46 @@ mod siphash {
         }
     }
 
-    #[summary("Writes the bytes of msg: the same as writing them one by one")]
+    #[summary("The little-endian word of bytes i to i + 7 of m")]
+    spec fn word(m: &[u8], i: usize) -> u64 {
+        u64::from_le_bytes([m[i], m[i + 1], m[i + 2], m[i + 3], m[i + 4], m[i + 5], m[i + 6], m[i + 7]])
+    }
+
+    #[summary("Writes the bytes of msg; equal to writing them one by one. As in the origin, the bytes that complete the tail go first, then whole words, then the bytes left over")]
     #[effects(pure)]
+    #[uses(ate, pw)]
     fn write(h: &mut Hasher, msg: &[u8]) -> ()
         requires ok(*h),
         ensures *h == pushes(*old(h), msg, msg.len()), ok(*h),
     {
-        for i in 0..msg.len()
-            invariant *h == pushes(*old(h), msg, i), ok(*h),
+        let n: usize = msg.len();
+        let mut i: usize = 0;
+        while i < n && h.ntail != 0
+            invariant i <= n, *h == pushes(*old(h), msg, i), ok(*h),
+            decreases n - i,
         {
             write_byte(h, msg[i]);
+            i = i + 1;
+        }
+        while i + 8 <= n
+            invariant i <= n, *h == pushes(*old(h), msg, i), ok(*h), i < n ==> h.ntail == 0, i + 8 <= n ==> h.ntail == 0,
+            decreases n - i,
+        {
+            let w: u64 = load_word(msg, i);
+            proof {
+                eight(*old(h), msg, i, *h);
+            }
+            let r: Rounds = h.rounds;
+            absorb_word(&mut h.state, w, r);
+            h.length = h.length.wrapping_add(8);
+            i = i + 8;
+        }
+        while i < n
+            invariant i <= n, *h == pushes(*old(h), msg, i), ok(*h),
+            decreases n - i,
+        {
+            write_byte(h, msg[i]);
+            i = i + 1;
         }
     }
 

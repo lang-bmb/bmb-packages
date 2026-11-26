@@ -126,7 +126,7 @@ Reported constructs, counted:
 
 Rewrites: 123 `#[effects(TODO)]`, 110 attributes dropped (mostly `#[inline]`), 88 receivers, 64 missing return types, 51 visibility, 51 doc comments, 49 `let` types, 19 literal suffixes, 6 `use crate::..` to full paths, 2 field init shorthands, 1 inner attributes.
 
-Of the 363 non-blank lines of `packages/siphash/src/siphash.bmb` (written by hand), 52 are identical to a line of the tool's output, all braces or `} else {`. The origin's SipRound is the macro `compress!`, which the tool drops. Its word loads are `unsafe` macro calls. The port's byte-at-a-time state machine and its specification have no counterpart line.
+Of the 442 non-blank lines of `packages/siphash/src/siphash.bmb` (written by hand), 61 are identical to a line of the tool's output, all braces or `} else {`. The origin's SipRound is the macro `compress!`, which the tool drops. Its word loads are `unsafe` macro calls. The port's state-machine specification and its lemmas have no counterpart line.
 
 ## Measured on hmac 0.13.0
 
@@ -217,7 +217,7 @@ The earlier three packages' numbers are unchanged by these (re-measured).
 | package | origin code lines | items written / dropped | reports | rewrites | raw output checks | final lines matching the tool's output (substantive) |
 | --- | --- | --- | --- | --- | --- | --- |
 | hex | 351 | 18 / 19 | 69 | 79 | no (30) | 43 of 339 (10) |
-| siphash | 987 | 44 / 30 | 148 | 564 | no (347) | 52 of 363 (0) |
+| siphash | 987 | 44 / 30 | 148 | 564 | no (347) | 61 of 442 (0) |
 | hmac | 359 | 42 / 28 | 285 | 89 | no (98) | 30 of 161 (1) |
 | semver | 1,222 | 59 / 59 | 420 | 185 | no (387) | 236 of 1,299 (28) |
 | percent_encoding | 451 | 18 / 17 | 89 | 87 | no (102) | 42 of 412 (1) |
