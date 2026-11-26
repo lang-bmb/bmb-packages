@@ -11,6 +11,8 @@ BMB is a language with a Rust-shaped surface whose functions carry contracts tha
 | Package | Origin | What it is |
 | --- | --- | --- |
 | [`hex`](packages/hex) | the Rust crate `hex` 0.4.3 | bytes as hexadecimal text and back (RFC 4648 base16), with a proved round trip |
+| [`siphash`](packages/siphash) | the Rust crate `siphasher` 1.0.4 | SipHash-2-4 and SipHash-1-3, 64- and 128-bit output, one-shot and incremental, with writing in pieces proved equal to writing the whole |
+| [`hmac`](packages/hmac) | the Rust crate `hmac` 0.13.0 | HMAC-SHA256 on top of `std::sha256`, proved to be HMAC in terms of the SHA-256 specification |
 
 ## Layout of a package
 
@@ -18,7 +20,8 @@ BMB is a language with a Rust-shaped surface whose functions carry contracts tha
 packages/<name>/
   package.json    name, version, summary, units, the std units it uses, origin (crate, version, repository, licence)
   src/<unit>.bmb  one file per unit, in normal form (bmb fmt)
-  tests/          the origin's tests and vectors as data, the program that runs them, and tests/run.sh
+  tests/          the origin's tests and vectors as data, the program that runs them, and tests/run.sh;
+                  tests/reference/ (when present) is the Cargo program that computed tests/reference.txt with the origin crate
   ORIGIN.md       where it comes from, its licence and attribution, what was changed in porting and why, what was left out
 ```
 
