@@ -1,0 +1,86 @@
+#[summary("Test driver of the percent_encoding package. The first argument is the operation: encode SET writes the percent-encoding of standard input under the set, decode writes the percent-decoding of standard input, round SET writes the decoding of the encoding (the set must hold %), set SET writes one character per ASCII byte, 1 when the set holds it and 0 when it does not. SET is empty, all, controls, non_alphanumeric, fragment (CONTROLS with space, double quote, < > and backquote added), a_b (EMPTY with A and B added), union_a_b (the union of EMPTY with A and EMPTY with B), not_a_b (the complement of a_b) or na_minus_dash (NON_ALPHANUMERIC with - removed). A bad command line exits with 2")]
+mod driver {
+    #[effects(alloc, io, nondet)]
+    fn main() -> () {
+        let args: Vec<String> = std::env::args();
+        if args.len() < 2 {
+            usage();
+        }
+        let mut input: Vec<u8> = Vec::new();
+        match std::io::read_to_end(&mut input) {
+            Ok(n) => {},
+            Err(e) => usage(),
+        }
+        if input.len() > 1000000000000000000 {
+            usage();
+        }
+        let op: String = args[1].clone();
+        if op == "decode" {
+            let v: Vec<u8> = percent_encoding::percent_decode(input.as_slice());
+            print_bytes(v.as_slice());
+        } else {
+            if args.len() < 3 {
+                usage();
+            }
+            let s: percent_encoding::AsciiSet = set_named(args[2].as_str());
+            if op == "encode" {
+                let t: String = percent_encoding::percent_encode(input.as_slice(), s);
+                print_str(t.as_str());
+            } else if op == "round" {
+                if !percent_encoding::contains(s, b'%') {
+                    usage();
+                }
+                let v: Vec<u8> = percent_encoding::round_trip(input.as_slice(), s);
+                print_bytes(v.as_slice());
+            } else if op == "set" {
+                let mut out: Vec<u8> = Vec::new();
+                let size: u8 = 128;
+                for b in 0..size {
+                    if percent_encoding::contains(s, b) {
+                        out.push(b'1');
+                    } else {
+                        out.push(b'0');
+                    }
+                }
+                print_bytes(out.as_slice());
+            } else {
+                usage();
+            }
+        }
+    }
+
+    #[effects(io)]
+    fn set_named(name: &str) -> percent_encoding::AsciiSet {
+        let a_b: percent_encoding::AsciiSet = percent_encoding::add(percent_encoding::add(percent_encoding::EMPTY, b'A'), b'B');
+        if name == "empty" {
+            percent_encoding::EMPTY
+        } else if name == "all" {
+            percent_encoding::complement(percent_encoding::EMPTY)
+        } else if name == "controls" {
+            percent_encoding::CONTROLS
+        } else if name == "non_alphanumeric" {
+            percent_encoding::NON_ALPHANUMERIC
+        } else if name == "fragment" {
+            percent_encoding::add(percent_encoding::add(percent_encoding::add(percent_encoding::add(percent_encoding::add(percent_encoding::CONTROLS, b' '), b'"'), b'<'), b'>'), b'`')
+        } else if name == "a_b" {
+            a_b
+        } else if name == "union_a_b" {
+            percent_encoding::union(percent_encoding::add(percent_encoding::EMPTY, b'A'), percent_encoding::add(percent_encoding::EMPTY, b'B'))
+        } else if name == "not_a_b" {
+            percent_encoding::complement(a_b)
+        } else if name == "na_minus_dash" {
+            percent_encoding::remove(percent_encoding::NON_ALPHANUMERIC, b'-')
+        } else {
+            usage();
+            percent_encoding::EMPTY
+        }
+    }
+
+    #[effects(io)]
+    fn usage() -> ()
+        ensures false,
+    {
+        eprint_str("usage: driver encode SET|decode|round SET|set SET < input\n");
+        std::process::exit(2);
+    }
+}

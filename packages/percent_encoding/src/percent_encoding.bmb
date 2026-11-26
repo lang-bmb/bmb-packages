@@ -1,0 +1,460 @@
+#[summary("percent_encoding: percent-encoding of bytes under a set of ASCII bytes, and lenient percent-decoding, ported from the Rust crate percent-encoding 2.3.2. percent_encode is specified byte by byte and its result is ASCII, percent_decode is specified exactly, and decoding the encoding gives the input back whenever % is in the set")]
+mod percent_encoding {
+    #[summary("The C0 controls 0x00 to 0x1f and DEL 0x7f")]
+    const CONTROLS: AsciiSet = AsciiSet { bits: [true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true] };
+    #[summary("The empty set")]
+    const EMPTY: AsciiSet = AsciiSet { bits: [false; 128] };
+    #[summary("Every ASCII byte but the letters and the digits: CONTROLS, the space and the 32 punctuation characters")]
+    const NON_ALPHANUMERIC: AsciiSet = AsciiSet { bits: [true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, false, false, false, false, false, false, false, false, false, false, true, true, true, true, true, true, true, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true, true, true, true, true, true, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true, true, true, true, true] };
+
+    #[summary("A set of ASCII bytes: bits[b] for each byte b below 128 (the origin keeps the same 128 bits in four u32 words)")]
+    struct AsciiSet { bits: [bool; 128] }
+
+    #[summary("s with the ASCII byte b added")]
+    #[effects(pure)]
+    #[uses(added)]
+    fn add(s: AsciiSet, b: u8) -> (r: AsciiSet)
+        requires b < 128,
+        ensures added(s, b, r),
+    {
+        let mut bits: [bool; 128] = s.bits;
+        bits[b as usize] = true;
+        AsciiSet { bits: bits }
+    }
+
+    spec fn added(s: AsciiSet, b: u8, r: AsciiSet) -> bool {
+        forall|c: usize| c < 128 ==> #[trigger] r.bits[c] == (s.bits[c] || c == b)
+    }
+
+    spec fn agree(s: AsciiSet, x: &[u8], t: &[u8], n: usize) -> bool {
+        forall|j: usize| j < n ==> pos(t, j) == elen(s, x, j) && out_at(t, pos(t, j)) == #[trigger] x[j]
+    }
+
+    #[summary("Every byte of t is ASCII")]
+    spec fn ascii(t: &[u8]) -> bool {
+        forall|k: usize| k < t.len() ==> #[trigger] t[k] < 128
+    }
+
+    #[summary("The complement of a among the ASCII bytes")]
+    #[effects(pure)]
+    #[uses(flipped)]
+    fn complement(a: AsciiSet) -> (r: AsciiSet)
+        ensures flipped(a, r),
+    {
+        let mut bits: [bool; 128] = [false; 128];
+        let size: usize = 128;
+        for c in 0..size
+            invariant forall|d: usize| d < c ==> #[trigger] bits[d] == !a.bits[d],
+        {
+            bits[c] = !a.bits[c];
+        }
+        AsciiSet { bits: bits }
+    }
+
+    #[summary("Whether byte is in the set")]
+    #[effects(pure)]
+    #[uses(has)]
+    fn contains(s: AsciiSet, byte: u8) -> (r: bool)
+        ensures r == has(s, byte),
+    {
+        byte < 128 && s.bits[byte as usize]
+    }
+
+    #[summary("v is the percent-decoding of t: % and two hex digits (either case) become the byte they stand for, any other byte stays, a % not followed by two hex digits included")]
+    spec fn decoded(t: &[u8], v: &[u8]) -> bool {
+        pos(t, v.len()) == t.len() && decoded_upto(t, v, v.len())
+    }
+
+    #[summary("v is the first n bytes of the decoding of t")]
+    spec fn decoded_upto(t: &[u8], v: &[u8], n: usize) -> bool {
+        n <= v.len() && (forall|k: usize| k < n ==> pos(t, k) < t.len() && #[trigger] v[k] == out_at(t, pos(t, k)))
+    }
+
+    #[summary("The upper-case digit of the 4-bit value x")]
+    spec fn digit(x: u8) -> u8 {
+        if x < 10 {
+            x + 48
+        } else {
+            x + 55
+        }
+    }
+
+    #[summary("The length of the encoding of the first n bytes of x")]
+    spec fn elen(s: AsciiSet, x: &[u8], n: usize) -> usize
+        decreases n,
+    {
+        if n == 0 || n > x.len() {
+            0
+        } else {
+            elen(s, x, n - 1) + width(s, x[n - 1])
+        }
+    }
+
+    #[summary("The encoding of k bytes is at most 3k bytes long")]
+    #[uses(elen, width)]
+    proof fn elen_le(s: AsciiSet, x: &[u8], k: usize)
+        requires k <= x.len(),
+        ensures k <= elen(s, x, k), elen(s, x, k) <= 3 * k,
+        decreases k,
+    {
+        if k > 0 {
+            elen_le(s, x, k - 1);
+        }
+    }
+
+    #[uses(elen)]
+    proof fn elen_step(s: AsciiSet, x: &[u8], i: usize)
+        requires i < x.len(),
+        ensures elen(s, x, i + 1) == elen(s, x, i) + width(s, x[i]),
+    {}
+
+    #[summary("t is the percent-encoding of x under s")]
+    spec fn encoded(s: AsciiSet, x: &[u8], t: &[u8]) -> bool {
+        encoded_upto(s, x, t, x.len())
+    }
+
+    #[summary("t is the percent-encoding of the first n bytes of x under s")]
+    spec fn encoded_upto(s: AsciiSet, x: &[u8], t: &[u8], n: usize) -> bool {
+        n <= x.len() && t.len() == elen(s, x, n) && n <= t.len() && t.len() <= 3 * n && (forall|i: usize| i < n ==> piece_of(s, #[trigger] x[i], t, elen(s, x, i)))
+    }
+
+    #[summary("b is percent-encoded under s: it is not ASCII or it is in s")]
+    spec fn encodes(s: AsciiSet, b: u8) -> bool {
+        b >= 128 || s.bits[b]
+    }
+
+    spec fn fits(x: &[u8]) -> bool {
+        x.len() <= 1000000000000000000
+    }
+
+    spec fn flipped(a: AsciiSet, r: AsciiSet) -> bool {
+        forall|c: usize| c < 128 ==> #[trigger] r.bits[c] == !a.bits[c]
+    }
+
+    #[summary("b is in s")]
+    spec fn has(s: AsciiSet, b: u8) -> bool {
+        b < 128 && s.bits[b]
+    }
+
+    #[summary("The upper-case digit of x as a character; it reads back as x")]
+    #[effects(pure)]
+    #[uses(digit, val_of)]
+    fn hex_char(x: u8) -> (r: char)
+        requires x < 16,
+        ensures u32::from(r) == digit(x), val_of(digit(x)) == x, digit(x) < 128,
+    {
+        let code: u32 = if x < 10 {
+            x as u32 + 48
+        } else {
+            x as u32 + 55
+        };
+        match char::from_u32(code) {
+            None => { assert(false); '0' },
+            Some(c) => c,
+        }
+    }
+
+    spec fn is_hex(c: u8) -> bool {
+        val_of(c) < 16
+    }
+
+    spec fn kept(t: &[u8], u: &[u8]) -> bool {
+        u.len() <= t.len() && (forall|k: usize| k < u.len() ==> #[trigger] t[k] == u[k])
+    }
+
+    spec fn kept_usize(t: &[usize], u: &[usize]) -> bool {
+        u.len() <= t.len() && (forall|k: usize| k < u.len() ==> #[trigger] t[k] == u[k])
+    }
+
+    #[summary("st holds the offsets of the pieces of the first n bytes of x")]
+    spec fn offsets(s: AsciiSet, x: &[u8], st: &[usize], n: usize) -> bool {
+        n <= st.len() && (forall|i: usize| i < n ==> #[trigger] st[i] == elen(s, x, i))
+    }
+
+    #[summary("The byte the decoder writes for position i of t")]
+    spec fn out_at(t: &[u8], i: usize) -> u8 {
+        if triple(t, i) {
+            val_of(t[i + 1]) * 16 + val_of(t[i + 2])
+        } else {
+            t[i]
+        }
+    }
+
+    #[summary("The percent-decoding of input, lenient as the origin's: a % that is not followed by two hex digits is kept")]
+    #[effects(alloc)]
+    #[uses(is_hex, out_at, pos, step, triple)]
+    fn percent_decode(input: &[u8]) -> (r: Vec<u8>)
+        ensures decoded(input, r.as_slice()), r.len() <= input.len(),
+    {
+        let n: usize = input.len();
+        let mut v: Vec<u8> = Vec::new();
+        let mut i: usize = 0;
+        while i < n
+            invariant i <= n, i == pos(input, v.len()), v.len() <= i, decoded_upto(input, v.as_slice(), v.len()),
+            decreases n - i,
+        {
+            let b: u8 = input[i];
+            if b == b'%' && i + 2 < n {
+                let h: u8 = value(input[i + 1]);
+                let l: u8 = value(input[i + 2]);
+                if h < 16 && l < 16 {
+                    v.push(h * 16 + l);
+                    i = i + 3;
+                } else {
+                    v.push(b);
+                    i = i + 1;
+                }
+            } else {
+                v.push(b);
+                i = i + 1;
+            }
+        }
+        v
+    }
+
+    #[summary("x percent-encoded under s: a byte that is not ASCII or is in s becomes % and two upper-case hex digits, any other byte stays. The result is ASCII, at least as long as x and at most three times as long. The offsets of the pieces are kept in a vector while the text grows (see ORIGIN.md)")]
+    #[effects(alloc)]
+    #[uses(encoded, kept, kept_usize, offsets, placed, width)]
+    fn percent_encode(input: &[u8], s: AsciiSet) -> (r: String)
+        requires fits(input),
+        ensures encoded(s, input, r.as_bytes()), ascii(r.as_bytes()),
+    {
+        let mut t: String = String::new();
+        let mut st: Vec<usize> = Vec::new();
+        for i in 0..input.len()
+            invariant st.len() == i, t.len() == elen(s, input, i), i <= t.len(), t.len() <= 3 * i, placed(s, input, st.as_slice(), t.as_bytes(), i), offsets(s, input, st.as_slice(), i), ascii(t.as_bytes()),
+        {
+            st.push(t.len());
+            push_encoded(&mut t, s, input[i]);
+            proof {
+                elen_step(s, input, i);
+            }
+        }
+        proof {
+            placed_encoded(s, input, st.as_slice(), t.as_bytes(), input.len());
+        }
+        t
+    }
+
+    #[summary("The encoding of byte b at offset o of t: %XY with upper-case digits when b is encoded, b itself otherwise")]
+    spec fn piece_of(s: AsciiSet, b: u8, t: &[u8], o: usize) -> bool {
+        o < t.len() && t[o] == (if encodes(s, b) { 37 } else { b }) && (encodes(s, b) ==> o + 2 < t.len() && t[o + 1] == digit(b / 16) && t[o + 2] == digit(b % 16))
+    }
+
+    #[summary("The pieces of the first n bytes of x are in t at the offsets st")]
+    spec fn placed(s: AsciiSet, x: &[u8], st: &[usize], t: &[u8], n: usize) -> bool {
+        n <= x.len() && n <= st.len() && (forall|i: usize| i < n ==> piece_of(s, #[trigger] x[i], t, st[i]))
+    }
+
+    #[summary("Pieces at the offsets elen gives are the encoding")]
+    #[uses(encoded_upto, offsets, placed)]
+    proof fn placed_encoded(s: AsciiSet, x: &[u8], st: &[usize], t: &[u8], n: usize)
+        requires placed(s, x, st, t, n), offsets(s, x, st, n), t.len() == elen(s, x, n), n <= t.len(), t.len() <= 3 * n,
+        ensures encoded_upto(s, x, t, n),
+    {}
+
+    #[summary("The position in t where the decoder writes output byte k")]
+    spec fn pos(t: &[u8], k: usize) -> usize
+        decreases k,
+    {
+        if k == 0 {
+            0
+        } else {
+            pos(t, k - 1) + step(t, pos(t, k - 1))
+        }
+    }
+
+    #[summary("Appends the encoding of b")]
+    #[effects(alloc)]
+    #[uses(ascii, digit, encodes, kept, piece_of, width)]
+    fn push_encoded(t: &mut String, s: AsciiSet, b: u8) -> ()
+        requires t.len() <= 3000000000000000000, ascii(t.as_bytes()),
+        ensures t.len() == old(t).len() + width(s, b), kept(t.as_bytes(), old(t).as_bytes()), piece_of(s, b, t.as_bytes(), old(t).len()), ascii(t.as_bytes()),
+    {
+        if should_percent_encode(s, b) {
+            t.push('%');
+            t.push(hex_char(b / 16));
+            t.push(hex_char(b % 16));
+        } else {
+            match char::from_u32(b as u32) {
+                None => { assert(false); },
+                Some(c) => t.push(c),
+            }
+        }
+    }
+
+    #[summary("s without the ASCII byte b")]
+    #[effects(pure)]
+    #[uses(removed)]
+    fn remove(s: AsciiSet, b: u8) -> (r: AsciiSet)
+        requires b < 128,
+        ensures removed(s, b, r),
+    {
+        let mut bits: [bool; 128] = s.bits;
+        bits[b as usize] = false;
+        AsciiSet { bits: bits }
+    }
+
+    spec fn removed(s: AsciiSet, b: u8, r: AsciiSet) -> bool {
+        forall|c: usize| c < 128 ==> #[trigger] r.bits[c] == (s.bits[c] && c != b)
+    }
+
+    #[summary("The round trip: when % is in s, decoding the encoding of x gives x. Proved from the contracts of the two functions; it runs both")]
+    #[effects(alloc)]
+    #[uses(agree, decoded, decoded_upto, encoded_upto, same)]
+    fn round_trip(x: &[u8], s: AsciiSet) -> (r: Vec<u8>)
+        requires fits(x), s.bits[37],
+        ensures same(r.as_slice(), x),
+    {
+        let t: String = percent_encode(x, s);
+        let v: Vec<u8> = percent_decode(t.as_bytes());
+        proof {
+            rt_all(s, x, t.as_bytes(), x.len());
+            rt_pos(s, x, t.as_bytes(), x.len());
+            if v.len() < x.len() {
+                rt_pos(s, x, t.as_bytes(), v.len());
+                elen_le(s, x, v.len());
+                rt_byte(s, x, t.as_bytes(), v.len(), elen(s, x, v.len()));
+                assert(false);
+            }
+            if v.len() > x.len() {
+                assert(pos(t.as_bytes(), x.len()) < t.len());
+                assert(false);
+            }
+            assert(v.len() == x.len());
+        }
+        v
+    }
+
+    #[uses(agree, fits)]
+    proof fn rt_all(s: AsciiSet, x: &[u8], t: &[u8], n: usize)
+        requires encoded(s, x, t), s.bits[37], n <= x.len(), fits(x),
+        ensures agree(s, x, t, n),
+        decreases n,
+    {
+        if n > 0 {
+            rt_all(s, x, t, n - 1);
+            rt_pos(s, x, t, n - 1);
+            elen_le(s, x, n - 1);
+            rt_byte(s, x, t, n - 1, elen(s, x, n - 1));
+        }
+    }
+
+    #[summary("and the byte the decoder writes there is byte k of x")]
+    #[uses(digit, encoded_upto, encodes, is_hex, out_at, piece_of, triple, val_of)]
+    proof fn rt_byte(s: AsciiSet, x: &[u8], t: &[u8], k: usize, o: usize)
+        requires encoded(s, x, t), s.bits[37], k < x.len(), o == elen(s, x, k),
+        ensures out_at(t, o) == x[k], o < t.len(),
+    {
+        assert(piece_of(s, x[k], t, o));
+    }
+
+    #[summary("so output byte k of the decoder starts where piece k does")]
+    #[uses(elen, fits, pos)]
+    proof fn rt_pos(s: AsciiSet, x: &[u8], t: &[u8], k: usize)
+        requires encoded(s, x, t), s.bits[37], k <= x.len(), fits(x),
+        ensures pos(t, k) == elen(s, x, k),
+        decreases k,
+    {
+        if k > 0 {
+            rt_pos(s, x, t, k - 1);
+            elen_le(s, x, k - 1);
+            rt_step(s, x, t, k - 1, elen(s, x, k - 1));
+        }
+    }
+
+    #[summary("Where % is in s, the decoder steps over piece k of the encoding of x, at offset o, in one step")]
+    #[uses(digit, encoded_upto, encodes, is_hex, piece_of, step, triple, val_of, width)]
+    proof fn rt_step(s: AsciiSet, x: &[u8], t: &[u8], k: usize, o: usize)
+        requires encoded(s, x, t), s.bits[37], k < x.len(), o == elen(s, x, k),
+        ensures step(t, o) == width(s, x[k]),
+    {
+        assert(piece_of(s, x[k], t, o));
+    }
+
+    spec fn same(a: &[u8], b: &[u8]) -> bool {
+        a.len() == b.len() && (forall|k: usize| k < a.len() ==> #[trigger] a[k] == b[k])
+    }
+
+    #[summary("Whether byte is percent-encoded under the set")]
+    #[effects(pure)]
+    #[uses(encodes)]
+    fn should_percent_encode(s: AsciiSet, byte: u8) -> (r: bool)
+        ensures r == encodes(s, byte),
+    {
+        byte >= 128 || s.bits[byte as usize]
+    }
+
+    #[summary("How many bytes of t the decoder reads at position i")]
+    spec fn step(t: &[u8], i: usize) -> usize {
+        if triple(t, i) {
+            3
+        } else {
+            1
+        }
+    }
+
+    #[summary("At position i of t, % and two hex digits")]
+    spec fn triple(t: &[u8], i: usize) -> bool {
+        i + 2 < t.len() && t[i] == 37 && is_hex(t[i + 1]) && is_hex(t[i + 2])
+    }
+
+    #[summary("The union of a and b")]
+    #[effects(pure)]
+    #[uses(united)]
+    fn union(a: AsciiSet, b: AsciiSet) -> (r: AsciiSet)
+        ensures united(a, b, r),
+    {
+        let mut bits: [bool; 128] = [false; 128];
+        let size: usize = 128;
+        for c in 0..size
+            invariant forall|d: usize| d < c ==> #[trigger] bits[d] == (a.bits[d] || b.bits[d]),
+        {
+            bits[c] = a.bits[c] || b.bits[c];
+        }
+        AsciiSet { bits: bits }
+    }
+
+    spec fn united(a: AsciiSet, b: AsciiSet, r: AsciiSet) -> bool {
+        forall|c: usize| c < 128 ==> #[trigger] r.bits[c] == (a.bits[c] || b.bits[c])
+    }
+
+    #[summary("The value of the hex digit c (either case), 16 for a byte that is not one")]
+    spec fn val_of(c: u8) -> u8 {
+        if 65 <= c && c <= 70 {
+            c - 55
+        } else if 97 <= c && c <= 102 {
+            c - 87
+        } else if 48 <= c && c <= 57 {
+            c - 48
+        } else {
+            16
+        }
+    }
+
+    #[summary("The value of the hex digit c, 16 for a byte that is not one (char::to_digit(16) of the origin)")]
+    #[effects(pure)]
+    #[uses(val_of)]
+    fn value(c: u8) -> (r: u8)
+        ensures r == val_of(c),
+    {
+        if c >= b'A' && c <= b'F' {
+            c - b'A' + 10
+        } else if c >= b'a' && c <= b'f' {
+            c - b'a' + 10
+        } else if c >= b'0' && c <= b'9' {
+            c - b'0'
+        } else {
+            16
+        }
+    }
+
+    #[summary("How many bytes the encoding of b takes")]
+    spec fn width(s: AsciiSet, b: u8) -> usize {
+        if encodes(s, b) {
+            3
+        } else {
+            1
+        }
+    }
+}

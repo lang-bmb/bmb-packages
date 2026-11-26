@@ -1,0 +1,24 @@
+{
+  "name": "percent_encoding",
+  "version": "0.1.0",
+  "summary": "Percent-encoding of bytes under a set of ASCII bytes and lenient percent-decoding, with exact contracts and a proved round trip",
+  "licence": "MIT",
+  "units": ["percent_encoding"],
+  "deps": {
+    "std": []
+  },
+  "origin": {
+    "crate": "percent-encoding",
+    "version": "2.3.2",
+    "repository": "https://github.com/servo/rust-url",
+    "commit": "91377f48bf35011d042aa5abef9e7f2a0a625aaa",
+    "licence": "MIT OR Apache-2.0"
+  },
+  "tests": [
+    {
+      "units": ["driver"],
+      "cases": ["cases.txt", "reference.txt"],
+      "format": "args|stdin|stdout"
+    }
+  ]
+}

@@ -1,0 +1,42 @@
+# Test cases of the percent_encoding package, kept as data, in gotgan's case format.
+#
+# One case per line: ARGS|STDIN|STDOUT. ARGS is the command line of tests/driver.bmb
+# (the operation and the name of a set, see the driver), STDIN what it reads on
+# standard input and STDOUT what it must write on standard output, both with the
+# escapes \\ and \xHH. Lines that start with # are comments.
+
+# ---- From the original crate, src/lib.rs `mod tests` ----
+
+# percent_encode_byte (every byte as %XX): see reference.txt, encode all
+# percent_encode_accepts_ascii_set_ref, utf8_percent_encode_accepts_ascii_set_ref
+encode empty|foo bar?|foo bar?
+# percent_encode_collect, percent_encode_display, percent_encode_cow, utf8_percent_encode
+encode non_alphanumeric|foo bar?|foo%20bar%3F
+encode controls|\x00\x01\x02\x03|%00%01%02%03
+# percent_decode, percent_decode_str, percent_decode_collect, percent_decode_cow
+decode|foo%20bar%3f|foo bar?
+decode|foo bar?|foo bar?
+# percent_decode_invalid_utf8, percent_decode_utf8_lossy_invalid_utf8: the bytes (UTF-8
+# validation of the result is not ported)
+decode|%00%9F%92%96|\x00\x9f\x92\x96
+# percent_decode_utf8_lossy: the four bytes of U+1F496
+decode|%F0%9F%92%96|\xf0\x9f\x92\x96
+
+# ---- From the original crate, src/ascii_set.rs `mod tests` ----
+
+# add_op and union: EMPTY.add(b'A') + EMPTY.add(b'B') == EMPTY.add(b'A').add(b'B')
+set a_b||00000000000000000000000000000000000000000000000000000000000000000110000000000000000000000000000000000000000000000000000000000000
+set union_a_b||00000000000000000000000000000000000000000000000000000000000000000110000000000000000000000000000000000000000000000000000000000000
+# not_op and complement: !set holds neither A nor B, and holds C
+set not_a_b||11111111111111111111111111111111111111111111111111111111111111111001111111111111111111111111111111111111111111111111111111111111
+
+# ---- From the original crate, the examples in the documentation ----
+
+# The crate's example: FRAGMENT = CONTROLS.add(b' ').add(b'"').add(b'<').add(b'>').add(b'`')
+encode fragment|foo <bar>|foo%20%3Cbar%3E
+# percent_encode_byte: "foo bar".bytes().map(percent_encode_byte)
+encode all|foo bar|%66%6F%6F%20%62%61%72
+# percent_encode, utf8_percent_encode
+encode non_alphanumeric|foo bar?|foo%20bar%3F
+# percent_decode
+decode|foo%20bar%3f|foo bar?
